@@ -1,50 +1,15 @@
-import streamlit as st
-from openai import OpenAI
 import json
-import pandas as pd
+import streamlit as st
+
+from openai import OpenAI
 from databricks import sql
 
-st.title("🏥 CityCare Clinic AI")
+# =====================================================
+# CONFIG
+# =====================================================
 
-token = st.text_input(
-    "Databricks AI Token",
-    type="password"
-)
-
-prompt = st.chat_input(
-    "¿Cómo puedo ayudarte?"
-)
-
-if token and prompt:
-
-    try:
-
-        client = OpenAI(
-            api_key=token,
-            base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
-        )
-
-        response = client.responses.create(
-            model="workspace.clinic_ai.clinic_ai_service_model",
-            max_output_tokens=256,
-            input=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_text",
-                            "text": prompt
-                        }
-                    ]
-                }
-            ]
-        )
-
-        st.write(response.output_text)
-
-    except Exception as e:
 st.set_page_config(
-    page_title="CityCare Clinic AI",
+    page_title="🏥 CityCare Clinic AI",
     page_icon="🏥",
     layout="wide"
 )
@@ -77,16 +42,11 @@ pediatra -> PED
 
 endocrino -> ENDO
 
-Examples:
+Example:
 
 {
   "intent":"search_doctor",
   "specialty":"CARD"
-}
-
-{
-  "intent":"search_doctor",
-  "specialty":"DERM"
 }
 """
 
@@ -117,9 +77,8 @@ Examples:
 
     return json.loads(response.output_text)
 
-
 # =====================================================
-# DATOS DE CONEXIÓN IA
+# CONEXION IA
 # =====================================================
 
 ai_token = st.text_input(
@@ -128,7 +87,7 @@ ai_token = st.text_input(
 )
 
 # =====================================================
-# DATOS DE CONEXIÓN SQL
+# CONEXION SQL
 # =====================================================
 
 hostname = st.text_input(
@@ -152,22 +111,24 @@ prompt = st.chat_input(
     "Pregúntame algo..."
 )
 
-if prompt:
+if (
+    prompt
+    and ai_token
+    and hostname
+    and http_path
+    and sql_token
+):
 
     try:
 
-        # ---------------------------------------------
-        # CLIENTE LLM
-        # ---------------------------------------------
+        # -----------------------------------------
+        # LLM
+        # -----------------------------------------
 
         client = OpenAI(
             api_key=ai_token,
             base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
         )
-
-        # ---------------------------------------------
-        # DETECTAR INTENCIÓN
-        # ---------------------------------------------
 
         intent = get_intent(
             client,
@@ -175,12 +136,11 @@ if prompt:
         )
 
         st.subheader("Intent detectada")
-
         st.json(intent)
 
-        # ---------------------------------------------
-        # CONEXIÓN SQL
-        # ---------------------------------------------
+        # -----------------------------------------
+        # SQL
+        # -----------------------------------------
 
         conn = sql.connect(
             server_hostname=hostname,
@@ -190,9 +150,9 @@ if prompt:
 
         cursor = conn.cursor()
 
-        # ---------------------------------------------
-        # BUSCAR MÉDICOS
-        # ---------------------------------------------
+        # -----------------------------------------
+        # SEARCH DOCTOR
+        # -----------------------------------------
 
         if intent["intent"] == "search_doctor":
 
@@ -210,10 +170,10 @@ if prompt:
 
             doctors = cursor.fetchall()
 
-            if len(doctors) == 0:
+            if not doctors:
 
                 st.warning(
-                    "No se han encontrado médicos."
+                    "No se encontraron médicos."
                 )
 
             else:
@@ -222,5 +182,18 @@ if prompt:
                     "He encontrado los siguientes especialistas:\n\n"
                 )
 
-         
+                for doctor in doctors:
+
+                    response_text += (
+                        f"• {doctor[0]} {doctor[1]} "
+                        f"({doctor[2]})\n"
+                    )
+
+                with st.chat_message("assistant"):
+                    st.write(response_text)
+
+    except Exception as e:
+
+        st.error(type(e).__name__)
         st.error(str(e))
+        
