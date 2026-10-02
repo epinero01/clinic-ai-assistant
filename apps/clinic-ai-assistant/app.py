@@ -1,5 +1,8 @@
 import streamlit as st
 from openai import OpenAI
+import json
+import pandas as pd
+from databricks import sql
 
 st.title("🏥 CityCare Clinic AI")
 
@@ -40,13 +43,6 @@ if token and prompt:
         st.write(response.output_text)
 
     except Exception as e:
-import json
-import streamlit as st
-import pandas as pd
-
-from openai import OpenAI
-from databricks import sql
-
 st.set_page_config(
     page_title="CityCare Clinic AI",
     page_icon="🏥",
