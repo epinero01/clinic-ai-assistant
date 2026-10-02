@@ -25,12 +25,11 @@ def get_intent(client, prompt):
     system_prompt = """
 You are an appointment assistant.
 
-Return ONLY JSON.
+Return ONLY valid JSON.
 
 Examples:
 
-User:
-Necesito un cardiólogo
+User: Necesito un cardiólogo
 
 Response:
 {
@@ -38,8 +37,7 @@ Response:
   "specialty":"CARD"
 }
 
-User:
-Busco un dermatólogo
+User: Busco un dermatólogo
 
 Response:
 {
@@ -47,8 +45,7 @@ Response:
   "specialty":"DERM"
 }
 
-User:
-Quiero un pediatra
+User: Quiero un pediatra
 
 Response:
 {
@@ -85,36 +82,36 @@ Response:
     return json.loads(response.output_text)
 
 
-def create_answer(client, user_request, doctors):
+def create_answer(client, user_request, slots):
 
-    doctors_text = ""
+    slots_text = ""
 
-    for d in doctors:
+    for row in slots:
 
-        doctors_text += (
-            f"Doctor: {d[0]} {d[1]}\n"
-            f"Date: {d[2]}\n"
-            f"Time: {d[3]}\n\n"
+        slots_text += (
+            f"Doctor: {row[0]} {row[1]}\n"
+            f"Date: {row[2]}\n"
+            f"Time: {row[3]}\n\n"
         )
 
-    prompt = f"""
+    answer_prompt = f"""
 User request:
 
 {user_request}
 
 Available appointments:
 
-{doctors_text}
+{slots_text}
 
-Respond naturally in Spanish.
+Reply in Spanish.
 
-Offer the available appointments and ask the user which one they prefer.
+Explain the available appointments and ask which one the user prefers.
 """
 
     response = client.responses.create(
         model="workspace.clinic_ai.clinic_ai_service_model",
         max_output_tokens=400,
-        input=prompt
+        input=answer_prompt
     )
 
     return response.output_text
@@ -164,27 +161,25 @@ if (
 
     try:
 
-        # -----------------------------------------
+        # -----------------------------
         # LLM
-        # -----------------------------------------
+        # -----------------------------
 
         client = OpenAI(
             api_key=ai_token,
             base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
         )
 
-        # -----------------------------------------
-        # INTENCION
-        # -----------------------------------------
-
         intent = get_intent(
             client,
             prompt
         )
 
-        # -----------------------------------------
+        st.json(intent)
+
+        # -----------------------------
         # SQL
-        # -----------------------------------------
+        # -----------------------------
 
         conn = sql.connect(
             server_hostname=hostname,
@@ -193,6 +188,10 @@ if (
         )
 
         cursor = conn.cursor()
+
+        # -----------------------------
+        # SEARCH DOCTOR
+        # -----------------------------
 
         if intent["intent"] == "search_doctor":
 
@@ -209,7 +208,33 @@ if (
                     ON d.doctor_id = ds.doctor_id
                 WHERE d.specialty_id = '{specialty}'
                   AND ds.slot_status = 'AVAILABLE'
-                ORDER BY ds.appointment_date,
-                         ds.start_time
+                ORDER BY
+                    ds.appointment_date,
+                    ds.start_time
                 LIMIT 20
             """)
+
+            rows = cursor.fetchall()
+
+            if len(rows) == 0:
+
+                st.warning(
+                    "No hay citas disponibles."
+                )
+
+            else:
+
+                answer = create_answer(
+                    client,
+                    prompt,
+                    rows
+                )
+
+                with st.chat_message("assistant"):
+                    st.write(answer)
+
+    except Exception as e:
+
+        st.error(type(e).__name__)
+        st.error(str(e))
+        
