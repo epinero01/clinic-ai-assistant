@@ -3,32 +3,28 @@ from databricks import sql
 
 st.title("🏥 CityCare Clinic")
 
-st.write("Intentando conectar...")
+hostname = st.text_input("Hostname")
+http_path = st.text_input("HTTP Path")
+token = st.text_input("PAT Token", type="password")
 
-HOSTNAME = "AQUI_TU_HOSTNAME"
-HTTP_PATH = "AQUI_TU_HTTP_PATH"
-TOKEN = "AQUI_TU_TOKEN"
+if st.button("Conectar"):
 
-try:
+    try:
 
-    conn = sql.connect(
-        server_hostname=HOSTNAME,
-        http_path=HTTP_PATH,
-        access_token=TOKEN
-    )
+        conn = sql.connect(
+            server_hostname=hostname,
+            http_path=http_path,
+            access_token=token
+        )
 
-    st.success("Conexión realizada")
+        cursor = conn.cursor()
 
-    cursor = conn.cursor()
+        cursor.execute("SELECT current_timestamp()")
 
-    cursor.execute("SELECT current_timestamp()")
+        result = cursor.fetchall()
 
-    result = cursor.fetchall()
+        st.success("Conexión correcta")
+        st.write(result)
 
-    st.write(result)
-
-except Exception as e:
-
-    st.error(type(e).__name__)
-    st.error(str(e))
-  
+    except Exception as e:
+        st.error(str(e)) 
