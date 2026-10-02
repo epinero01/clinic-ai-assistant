@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import uuid
+
 from databricks import sql
 
 st.set_page_config(
@@ -11,7 +13,7 @@ st.set_page_config(
 st.title("🏥 CityCare Clinic")
 
 # ==================================================
-# CONEXION
+# CONEXIÓN
 # ==================================================
 
 hostname = st.text_input("Server Hostname")
@@ -63,7 +65,7 @@ if hostname and http_path and token:
         ].iloc[0]
 
         # ==================================================
-        # MEDICOS
+        # MÉDICOS
         # ==================================================
 
         cursor.execute(f"""
@@ -106,7 +108,7 @@ if hostname and http_path and token:
         ].iloc[0]
 
         # ==================================================
-        # SLOTS
+        # SLOTS DISPONIBLES
         # ==================================================
 
         cursor.execute(f"""
@@ -116,8 +118,9 @@ if hostname and http_path and token:
                 start_time
             FROM clinic_ai.doctor_schedule
             WHERE doctor_id = '{doctor_id}'
-            AND slot_status = 'AVAILABLE'
-            ORDER BY appointment_date, start_time
+              AND slot_status = 'AVAILABLE'
+            ORDER BY appointment_date,
+                     start_time
             LIMIT 20
         """)
 
@@ -132,7 +135,7 @@ if hostname and http_path and token:
 
         if len(slots) == 0:
 
-            st.warning("No hay huecos disponibles")
+            st.warning("No hay huecos disponibles.")
 
         else:
 
@@ -195,19 +198,91 @@ if hostname and http_path and token:
             )
 
             # ==================================================
-            # RESUMEN
+            # RESERVA
             # ==================================================
 
             if st.button("Reservar cita"):
 
-                st.success("✅ Reserva preparada")
+                appointment_id = str(uuid.uuid4())
 
-                st.json({
-                    "patient_id": patient_id,
-                    "doctor_id": doctor_id,
-                    "slot_id": slot_id,
-                    "reason": reason
-                })
+                try:
+
+                    cursor.execute(f"""
+                        INSERT INTO clinic_ai.appointments
+                        VALUES (
+                            '{appointment_id}',
+                            '{patient_id}',
+                            '{slot_id}',
+                            '{reason}',
+                            'IN_PERSON',
+                            'SCHEDULED',
+                            NULL,
+                            current_timestamp(),
+                            current_timestamp()
+                        )
+                    """)
+
+                    cursor.execute(f"""
+                        UPDATE clinic_ai.doctor_schedule
+                        SET
+                            slot_status = 'BOOKED',
+                            updated_at = current_timestamp()
+                        WHERE slot_id = '{slot_id}'
+                    """)
+
+                    st.success("✅ Cita reservada correctamente")
+
+                    st.json({
+                        "appointment_id": appointment_id,
+                        "patient_id": patient_id,
+                        "doctor_id": doctor_id,
+                        "slot_id": slot_id,
+                        "status": "SCHEDULED"
+                    })
+
+                except Exception as booking_error:
+
+                    st.error("Error al reservar la cita")
+                    st.error(str(booking_error))
+
+        # ==================================================
+        # ÚLTIMAS CITAS
+        # ==================================================
+
+        st.divider()
+
+        st.subheader("Últimas citas registradas")
+
+        try:
+
+            cursor.execute("""
+                SELECT
+                    appointment_id,
+                    patient_id,
+                    slot_id,
+                    status
+                FROM clinic_ai.appointments
+                ORDER BY created_at DESC
+                LIMIT 20
+            """)
+
+            appointments = pd.DataFrame(
+                cursor.fetchall(),
+                columns=[
+                    "appointment_id",
+                    "patient_id",
+                    "slot_id",
+                    "status"
+                ]
+            )
+
+            st.dataframe(
+                appointments,
+                use_container_width=True
+            )
+
+        except:
+            pass
 
     except Exception as e:
 
