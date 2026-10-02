@@ -9,7 +9,7 @@ from databricks import sql
 # =====================================================
 
 st.set_page_config(
-    page_title="🏥 CityCare Clinic AI",
+    page_title="CityCare Clinic AI",
     page_icon="🏥",
     layout="wide"
 )
@@ -23,30 +23,37 @@ st.title("🏥 CityCare Clinic AI")
 def get_intent(client, prompt):
 
     system_prompt = """
-You are a medical routing assistant.
+You are an appointment assistant.
 
-Return ONLY valid JSON.
+Return ONLY JSON.
 
-Supported intents:
-- search_doctor
+Examples:
 
-Specialty mappings:
+User:
+Necesito un cardiólogo
 
-cardiologo -> CARD
-cardiólogo -> CARD
-
-dermatologo -> DERM
-dermatólogo -> DERM
-
-pediatra -> PED
-
-endocrino -> ENDO
-
-Example:
-
+Response:
 {
   "intent":"search_doctor",
   "specialty":"CARD"
+}
+
+User:
+Busco un dermatólogo
+
+Response:
+{
+  "intent":"search_doctor",
+  "specialty":"DERM"
+}
+
+User:
+Quiero un pediatra
+
+Response:
+{
+  "intent":"search_doctor",
+  "specialty":"PED"
 }
 """
 
@@ -76,6 +83,42 @@ Example:
     )
 
     return json.loads(response.output_text)
+
+
+def create_answer(client, user_request, doctors):
+
+    doctors_text = ""
+
+    for d in doctors:
+
+        doctors_text += (
+            f"Doctor: {d[0]} {d[1]}\n"
+            f"Date: {d[2]}\n"
+            f"Time: {d[3]}\n\n"
+        )
+
+    prompt = f"""
+User request:
+
+{user_request}
+
+Available appointments:
+
+{doctors_text}
+
+Respond naturally in Spanish.
+
+Offer the available appointments and ask the user which one they prefer.
+"""
+
+    response = client.responses.create(
+        model="workspace.clinic_ai.clinic_ai_service_model",
+        max_output_tokens=400,
+        input=prompt
+    )
+
+    return response.output_text
+
 
 # =====================================================
 # CONEXION IA
@@ -108,7 +151,7 @@ sql_token = st.text_input(
 # =====================================================
 
 prompt = st.chat_input(
-    "Pregúntame algo..."
+    "¿Cómo puedo ayudarte?"
 )
 
 if (
@@ -130,13 +173,14 @@ if (
             base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
         )
 
+        # -----------------------------------------
+        # INTENCION
+        # -----------------------------------------
+
         intent = get_intent(
             client,
             prompt
         )
-
-        st.subheader("Intent detectada")
-        st.json(intent)
 
         # -----------------------------------------
         # SQL
@@ -150,50 +194,22 @@ if (
 
         cursor = conn.cursor()
 
-        # -----------------------------------------
-        # SEARCH DOCTOR
-        # -----------------------------------------
-
         if intent["intent"] == "search_doctor":
 
             specialty = intent["specialty"]
 
             cursor.execute(f"""
                 SELECT
-                    first_name,
-                    last_name,
-                    subspecialty
-                FROM clinic_ai.doctors
-                WHERE specialty_id = '{specialty}'
-                ORDER BY last_name
+                    d.first_name,
+                    d.last_name,
+                    ds.appointment_date,
+                    ds.start_time
+                FROM clinic_ai.doctors d
+                INNER JOIN clinic_ai.doctor_schedule ds
+                    ON d.doctor_id = ds.doctor_id
+                WHERE d.specialty_id = '{specialty}'
+                  AND ds.slot_status = 'AVAILABLE'
+                ORDER BY ds.appointment_date,
+                         ds.start_time
+                LIMIT 20
             """)
-
-            doctors = cursor.fetchall()
-
-            if not doctors:
-
-                st.warning(
-                    "No se encontraron médicos."
-                )
-
-            else:
-
-                response_text = (
-                    "He encontrado los siguientes especialistas:\n\n"
-                )
-
-                for doctor in doctors:
-
-                    response_text += (
-                        f"• {doctor[0]} {doctor[1]} "
-                        f"({doctor[2]})\n"
-                    )
-
-                with st.chat_message("assistant"):
-                    st.write(response_text)
-
-    except Exception as e:
-
-        st.error(type(e).__name__)
-        st.error(str(e))
-        
