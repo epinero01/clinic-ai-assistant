@@ -1,7 +1,7 @@
 import streamlit as st
 from databricks import sql
 
-st.title("🏥 CityCare Clinic")
+st.title("🏥 CityCare Clinic prueba conexion")
 
 hostname = st.text_input("Hostname")
 http_path = st.text_input("HTTP Path")
