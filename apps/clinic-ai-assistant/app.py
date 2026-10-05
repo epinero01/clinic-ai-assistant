@@ -236,7 +236,7 @@ sql_token = st.text_input(
 
 for msg in st.session_state.messages:
 
-    if msg["role"] in ["user", "assistant"\]:
+    if msg["role"] in ["user", "assistant"]:
 
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
