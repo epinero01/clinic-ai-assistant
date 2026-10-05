@@ -267,26 +267,26 @@ if (
     with st.chat_message("user"):
         st.write(prompt)
 
-    try:
-
-        client = OpenAI(
-            api_key=ai_token,
-            base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
-        )
-
-        conn = sql.connect(
-            server_hostname=hostname,
-            http_path=http_path,
-            access_token=sql_token
-        )
-
-        cursor = conn.cursor()
-
-        system_prompt = """
+try:
+ 
+client = OpenAI(
+api_key=ai_token,
+base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
+)
+ 
+conn = sql.connect(
+server_hostname=hostname,
+http_path=http_path,
+access_token=sql_token
+)
+ 
+cursor = conn.cursor()
+ 
+system_prompt = """
 You are a medical appointment assistant.
-
+ 
 Rules:
-
+ 
 1. Never invent specialties.
 2. Always call get_specialties first.
 3. Use only specialties returned by the catalog.
@@ -295,24 +295,24 @@ Rules:
 6. Never invent slot identifiers.
 7. Use only slot_id values returned by get_available_slots.
 8. If the user chooses a specific appointment,
-   call select_slot.
+call select_slot.
 9. After selecting a slot,
-   confirm which slot was selected and ask
-   the user if they want to proceed.
+confirm which slot was selected and ask
+the user if they want to proceed.
 """
-
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            *st.session_state.messages
-        ]
-
-        # ==========================================
-        # AGENT LOOP
-        # ==========================================
-
+ 
+messages = [
+{
+"role": "system",
+"content": system_prompt
+},
+*st.session_state.messages
+]
+ 
+# ==========================================
+# AGENT LOOP
+# ==========================================
+ 
         while True:
 
             response = client.chat.completions.create(
@@ -321,3 +321,57 @@ Rules:
                 tools=TOOLS,
                 tool_choice="auto"
             )
+
+            message = response.choices[0].message
+
+            if not message.tool_calls:
+                final_answer = message.content
+                break
+
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in message.tool_calls
+                    ]
+                }
+            )
+
+            for tool_call in message.tool_calls:
+
+                tool_result = execute_tool(
+                    tool_call,
+                    cursor
+                )
+
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": json.dumps(tool_result)
+                    }
+                )
+
+        st.session_state.messages.append(
+            {
+                "role": "assistant",
+                "content": final_answer
+            }
+        )
+
+        with st.chat_message("assistant"):
+            st.write(final_answer)
+
+    except Exception as e:
+
+        st.error(type(e).__name__)
+        st.error(str(e))
