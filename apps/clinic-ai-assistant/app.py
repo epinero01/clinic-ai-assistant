@@ -236,7 +236,7 @@ sql_token = st.text_input(
 
 for msg in st.session_state.messages:
 
-    if msg["role"] in ["user", "assistant"]:
+    if msg["role"] in ["user", "assistant"\]:
 
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
@@ -320,43 +320,4 @@ Rules:
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto"
-            )
-
-            message = response.choices[0].message
-
-            if not message.tool_calls:
-
-                final_answer = message.content
-                break
-
-            messages.append(message)
-
-           for tool_call in message.tool_calls:
-
-                tool_result = execute_tool(
-                    tool_call,
-                    cursor
-                )
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(tool_result)
-                    }
-                )
-
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": final_answer
-            }
-        )
-
-        with st.chat_message("assistant"):
-            st.write(final_answer)
-
-    except Exception as e:
-
-        st.error(type(e).__name__)
-        st.error(str(e))
+    
