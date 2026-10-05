@@ -268,7 +268,7 @@ if (
         st.write(prompt)
 
 try:
- 
+    
 client = OpenAI(
 api_key=ai_token,
 base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
