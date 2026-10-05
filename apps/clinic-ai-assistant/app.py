@@ -1,4 +1,5 @@
 import json
+import uuid
 import streamlit as st
 
 from openai import OpenAI
@@ -9,7 +10,7 @@ from databricks import sql
 # =====================================================
 
 st.set_page_config(
-    page_title="CityCare Clinic AI",
+    page_title="🏥 CityCare Clinic AI",
     page_icon="🏥",
     layout="wide"
 )
@@ -17,40 +18,47 @@ st.set_page_config(
 st.title("🏥 CityCare Clinic AI")
 
 # =====================================================
-# FUNCIONES
+# SESSION STATE
+# =====================================================
+
+if "step" not in st.session_state:
+    st.session_state.step = "search"
+
+if "available_slots" not in st.session_state:
+    st.session_state.available_slots = []
+
+if "selected_slot" not in st.session_state:
+    st.session_state.selected_slot = None
+
+# =====================================================
+# LLM
 # =====================================================
 
 def get_intent(client, prompt):
 
     system_prompt = """
-You are an appointment assistant.
+You are a medical booking assistant.
 
-Return ONLY valid JSON.
+Return ONLY JSON.
 
-Examples:
+Possible outputs:
 
-User: Necesito un cardiólogo
-
-Response:
 {
   "intent":"search_doctor",
   "specialty":"CARD"
 }
 
-User: Busco un dermatólogo
-
-Response:
 {
-  "intent":"search_doctor",
-  "specialty":"DERM"
+  "intent":"select_slot",
+  "option":1
 }
 
-User: Quiero un pediatra
-
-Response:
 {
-  "intent":"search_doctor",
-  "specialty":"PED"
+  "intent":"confirm_booking"
+}
+
+{
+  "intent":"cancel_booking"
 }
 """
 
@@ -81,54 +89,14 @@ Response:
 
     return json.loads(response.output_text)
 
-
-def create_answer(client, user_request, slots):
-
-    slots_text = ""
-
-    for row in slots:
-
-        slots_text += (
-            f"Doctor: {row[0]} {row[1]}\n"
-            f"Date: {row[2]}\n"
-            f"Time: {row[3]}\n\n"
-        )
-
-    answer_prompt = f"""
-User request:
-
-{user_request}
-
-Available appointments:
-
-{slots_text}
-
-Reply in Spanish.
-
-Explain the available appointments and ask which one the user prefers.
-"""
-
-    response = client.responses.create(
-        model="workspace.clinic_ai.clinic_ai_service_model",
-        max_output_tokens=400,
-        input=answer_prompt
-    )
-
-    return response.output_text
-
-
 # =====================================================
-# CONEXION IA
+# CONNECTION DATA
 # =====================================================
 
 ai_token = st.text_input(
     "Databricks AI Token",
     type="password"
 )
-
-# =====================================================
-# CONEXION SQL
-# =====================================================
 
 hostname = st.text_input(
     "SQL Server Hostname"
@@ -143,13 +111,13 @@ sql_token = st.text_input(
     type="password"
 )
 
-# =====================================================
-# CHAT
-# =====================================================
-
 prompt = st.chat_input(
     "¿Cómo puedo ayudarte?"
 )
+
+# =====================================================
+# MAIN
+# =====================================================
 
 if (
     prompt
@@ -161,25 +129,10 @@ if (
 
     try:
 
-        # -----------------------------
-        # LLM
-        # -----------------------------
-
         client = OpenAI(
             api_key=ai_token,
             base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
         )
-
-        intent = get_intent(
-            client,
-            prompt
-        )
-
-        st.json(intent)
-
-        # -----------------------------
-        # SQL
-        # -----------------------------
 
         conn = sql.connect(
             server_hostname=hostname,
@@ -189,18 +142,26 @@ if (
 
         cursor = conn.cursor()
 
-        # -----------------------------
-        # SEARCH DOCTOR
-        # -----------------------------
+        intent = get_intent(client, prompt)
 
-        if intent["intent"] == "search_doctor":
+        # =============================================
+        # STEP 1
+        # SEARCH
+        # =============================================
+
+        if (
+            st.session_state.step == "search"
+            and intent["intent"] == "search_doctor"
+        ):
 
             specialty = intent["specialty"]
 
             cursor.execute(f"""
                 SELECT
+                    d.doctor_id,
                     d.first_name,
                     d.last_name,
+                    ds.slot_id,
                     ds.appointment_date,
                     ds.start_time
                 FROM clinic_ai.doctors d
@@ -211,30 +172,149 @@ if (
                 ORDER BY
                     ds.appointment_date,
                     ds.start_time
-                LIMIT 20
+                LIMIT 10
             """)
 
-            rows = cursor.fetchall()
+            slots = cursor.fetchall()
 
-            if len(rows) == 0:
+            if len(slots) == 0:
 
                 st.warning(
-                    "No hay citas disponibles."
+                    "No hay disponibilidad."
                 )
 
             else:
 
-                answer = create_answer(
-                    client,
-                    prompt,
-                    rows
+                st.session_state.available_slots = slots
+                st.session_state.step = "choose_slot"
+
+                answer = (
+                    "He encontrado estas citas:\n\n"
                 )
 
-                with st.chat_message("assistant"):
-                    st.write(answer)
+                for i, slot in enumerate(slots, start=1):
+
+                    answer += (
+                        f"{i}. "
+                        f"{slot[1]} {slot[2]} | "
+                        f"{slot[4]} | "
+                        f"{slot[5]}\n"
+                    )
+
+                answer += (
+                    "\nIndica el número de la opción."
+                )
+
+                st.write(answer)
+
+        # =============================================
+        # STEP 2
+        # SELECT SLOT
+        # =============================================
+
+        elif st.session_state.step == "choose_slot":
+
+            try:
+
+                option = int(prompt)
+
+                selected = (
+                    st.session_state.available_slots[
+                        option - 1
+                    ]
+                )
+
+                st.session_state.selected_slot = selected
+                st.session_state.step = "confirm"
+
+                st.write(
+                    f"""
+Has seleccionado:
+
+Doctor:
+{selected[1]} {selected[2]}
+
+Fecha:
+{selected[4]}
+
+Hora:
+{selected[5]}
+
+¿Confirmas la reserva? (sí/no)
+"""
+                )
+
+            except:
+
+                st.warning(
+                    "Escribe el número de una opción."
+                )
+
+        # =============================================
+        # STEP 3
+        # CONFIRM
+        # =============================================
+
+        elif st.session_state.step == "confirm":
+
+            if prompt.lower() in [
+                "si",
+                "sí",
+                "yes",
+                "confirmar"
+            \]:
+
+                selected = st.session_state.selected_slot
+
+                appointment_id = str(
+                    uuid.uuid4()
+                )
+
+                # Para PoC
+                patient_id = "PAT001"
+
+                cursor.execute(f"""
+                    INSERT INTO clinic_ai.appointments
+                    VALUES (
+                        '{appointment_id}',
+                        '{patient_id}',
+                        '{selected[3]}',
+                        'Appointment booked from AI assistant',
+                        'IN_PERSON',
+                        'SCHEDULED',
+                        NULL,
+                        current_timestamp(),
+                        current_timestamp()
+                    )
+                """)
+
+                cursor.execute(f"""
+                    UPDATE clinic_ai.doctor_schedule
+                    SET
+                        slot_status='BOOKED',
+                        updated_at=current_timestamp()
+                    WHERE slot_id='{selected[3]}'
+                """)
+
+                st.success(
+                    "✅ Cita reservada correctamente"
+                )
+
+                st.session_state.step = "search"
+                st.session_state.available_slots = []
+                st.session_state.selected_slot = None
+
+            else:
+
+                st.info(
+                    "Reserva cancelada."
+                )
+
+                st.session_state.step = "search"
+                st.session_state.available_slots = []
+                st.session_state.selected_slot = None
 
     except Exception as e:
 
         st.error(type(e).__name__)
         st.error(str(e))
-        
