@@ -320,4 +320,4 @@ Rules:
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto"
-    
+            )
