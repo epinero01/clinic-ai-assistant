@@ -1,0 +1,160 @@
+-- ==========================================
+-- SCHEMA
+-- ==========================================
+
+CREATE SCHEMA IF NOT EXISTS clinic_ai;
+
+-- ==========================================
+-- DROP TABLES (si existen)
+-- ==========================================
+
+DROP TABLE IF EXISTS clinic_ai.specialties;
+DROP TABLE IF EXISTS clinic_ai.insurance_plans;
+DROP TABLE IF EXISTS clinic_ai.patients;
+DROP TABLE IF EXISTS clinic_ai.patient_relationships;
+DROP TABLE IF EXISTS clinic_ai.doctors;
+DROP TABLE IF EXISTS clinic_ai.doctor_schedule;
+DROP TABLE IF EXISTS clinic_ai.appointments;
+DROP TABLE IF EXISTS clinic_ai.clinic_policies;
+
+-- ==========================================
+-- SPECIALTIES
+-- ==========================================
+
+CREATE TABLE clinic_ai.specialties (
+    specialty_id STRING,
+    specialty_name STRING,
+    description STRING,
+    active BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- INSURANCE_PLANS
+-- ==========================================
+
+CREATE TABLE clinic_ai.insurance_plans (
+    insurance_id STRING,
+    provider_name STRING,
+    plan_name STRING,
+    coverage_level STRING,
+    telemedicine_covered BOOLEAN,
+    active BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- PATIENTS
+-- ==========================================
+
+CREATE TABLE clinic_ai.patients (
+    patient_id STRING,
+    first_name STRING,
+    last_name STRING,
+    birth_date DATE,
+    gender STRING,
+    email STRING,
+    phone STRING,
+    preferred_language STRING,
+    insurance_id STRING,
+    registration_date TIMESTAMP,
+    active BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- PATIENT_RELATIONSHIPS
+-- ==========================================
+
+CREATE TABLE clinic_ai.patient_relationships (
+    relationship_id STRING,
+    guardian_patient_id STRING,
+    dependent_patient_id STRING,
+    relationship_type STRING,
+    active BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- DOCTORS
+-- ==========================================
+
+CREATE TABLE clinic_ai.doctors (
+    doctor_id STRING,
+    first_name STRING,
+    last_name STRING,
+    specialty_id STRING,
+    subspecialty STRING,
+    gender STRING,
+    patient_type STRING,
+    languages STRING,
+    clinic_location STRING,
+    telemedicine_available BOOLEAN,
+    active BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- DOCTOR_SCHEDULE
+-- ==========================================
+
+CREATE TABLE clinic_ai.doctor_schedule (
+    slot_id STRING,
+    doctor_id STRING,
+    appointment_date DATE,
+    start_time STRING,
+    end_time STRING,
+    slot_status STRING,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- APPOINTMENTS
+-- ==========================================
+
+CREATE TABLE clinic_ai.appointments (
+    appointment_id STRING,
+    patient_id STRING,
+    slot_id STRING,
+    appointment_reason STRING,
+    appointment_type STRING,
+    status STRING,
+    notes STRING,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- CLINIC_POLICIES
+-- ==========================================
+
+CREATE TABLE clinic_ai.clinic_policies (
+    policy_id STRING,
+    category STRING,
+    title STRING,
+    content STRING,
+    effective_date DATE,
+    active BOOLEAN,
+    created_at TIMESTAMP,
+    updated_at TIMESTAMP
+)
+USING DELTA;
+
+-- ==========================================
+-- VALIDACION
+-- ==========================================
+
+SHOW TABLES IN clinic_ai;
