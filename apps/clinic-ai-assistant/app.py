@@ -199,7 +199,7 @@ def execute_tool(tool_call, cursor):
         )
 
     if function_name == "select_slot":
-
+        
         return select_slot(
             arguments["slot_id"]
         )
