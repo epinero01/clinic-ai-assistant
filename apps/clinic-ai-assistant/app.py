@@ -186,6 +186,7 @@ call book_appointment.
             if tool_name == "find_slots":
 
                 specialty = args["specialty"]
+                st.write("Especialidad detectada:", specialty)
 
                 cursor.execute(f"""
                     SELECT
