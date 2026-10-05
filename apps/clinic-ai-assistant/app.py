@@ -24,6 +24,12 @@ st.title("🏥 Clinic AI")
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+if "available_slots" not in st.session_state:
+    st.session_state.available_slots = []
+
+if "selected_slot" not in st.session_state:
+    st.session_state.selected_slot = None
+
 # ======================================================
 # TOOLS
 # ======================================================
@@ -75,7 +81,7 @@ def get_available_slots(cursor, specialty_id):
 
     rows = cursor.fetchall()
 
-    return [
+    result = [
         {
             "doctor_id": row[0],
             "doctor_name": f"{row[1]} {row[2]}",
@@ -85,6 +91,28 @@ def get_available_slots(cursor, specialty_id):
         }
         for row in rows
     ]
+
+    st.session_state.available_slots = result
+
+    return result
+
+
+def select_slot(slot_id):
+
+    for slot in st.session_state.available_slots:
+
+        if slot["slot_id"] == slot_id:
+
+            st.session_state.selected_slot = slot
+
+            return {
+                "status": "selected",
+                "slot": slot
+            }
+
+    return {
+        "status": "not_found"
+    }
 
 # ======================================================
 # TOOL DEFINITIONS
@@ -109,8 +137,7 @@ TOOLS = [
         "function": {
             "name": "get_available_slots",
             "description": (
-                "Retrieve appointment slots "
-                "for a specialty."
+                "Retrieve appointment slots for a specialty."
             ),
             "parameters": {
                 "type": "object",
@@ -121,6 +148,27 @@ TOOLS = [
                 },
                 "required": [
                     "specialty_id"
+                ]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "select_slot",
+            "description": (
+                "Select one appointment slot from the slots "
+                "previously returned to the user."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slot_id": {
+                        "type": "string"
+                    }
+                },
+                "required": [
+                    "slot_id"
                 ]
             }
         }
@@ -148,6 +196,12 @@ def execute_tool(tool_call, cursor):
         return get_available_slots(
             cursor,
             arguments["specialty_id"]
+        )
+
+    if function_name == "select_slot":
+
+        return select_slot(
+            arguments["slot_id"]
         )
 
     return {
@@ -182,7 +236,7 @@ sql_token = st.text_input(
 
 for msg in st.session_state.messages:
 
-    if msg["role"] in ["user", "assistant"]:
+    if msg["role"] in ["user", "assistant"\]:
 
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
@@ -217,11 +271,7 @@ if (
 
         client = OpenAI(
             api_key=ai_token,
-            base_url=(
-                "https://dbc-3bb54e54-c2b6."
-                "cloud.databricks.com/"
-                "ai-gateway/mlflow/v1"
-            )
+            base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
         )
 
         conn = sql.connect(
@@ -239,9 +289,16 @@ Rules:
 
 1. Never invent specialties.
 2. Always call get_specialties first.
-3. Choose the best matching specialty from the catalog.
+3. Use only specialties returned by the catalog.
 4. Then call get_available_slots.
 5. Present available appointments in Spanish.
+6. Never invent slot identifiers.
+7. Use only slot_id values returned by get_available_slots.
+8. If the user chooses a specific appointment,
+   call select_slot.
+9. After selecting a slot,
+   confirm which slot was selected and ask
+   the user if they want to proceed.
 """
 
         messages = [
@@ -274,7 +331,7 @@ Rules:
 
             messages.append(message)
 
-            for tool_call in message.tool_calls:
+           for tool_call in message.tool_calls:
 
                 tool_result = execute_tool(
                     tool_call,
