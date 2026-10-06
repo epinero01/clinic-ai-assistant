@@ -221,6 +221,8 @@ def create_appointment(cursor):
 
     patient = st.session_state.patient
     slot = st.session_state.selected_slot
+    st.write("DEBUG patient:", st.session_state.patient)
+    st.write("DEBUG selected_slot:", st.session_state.selected_slot)
 
     if not patient:
         return {
@@ -237,6 +239,12 @@ def create_appointment(cursor):
     appointment_id = str(uuid.uuid4())
 
     now = datetime.now()
+    st.write("DEBUG appointment params:", {
+    "patient_id": patient["patient_id"],
+    "slot_id": slot["slot_id"],
+    "appointment_type": "STANDARD",
+    "status": "CONFIRMED"
+    })
 
     cursor.execute("""
         INSERT INTO workspace.clinic_ai.appointments (
