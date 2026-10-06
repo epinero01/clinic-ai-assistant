@@ -434,13 +434,19 @@ TOOLS = [
             "name": "select_slot",
             "description": (
                 "Select one appointment slot from the slots "
-                "previously returned to the user."
+                "previously returned to the user. "
+                "The slot_id must be the internal slot_id "
+                "returned by get_available_slots."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "slot_id": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "Internal slot_id returned by "
+                            "get_available_slots."
+                        )
                     }
                 },
                 "required": [
@@ -455,11 +461,10 @@ TOOLS = [
         "function": {
             "name": "create_appointment",
             "description": (
-                "Create the appointment after the patient has "
-                "selected a slot and explicitly confirmed that "
-                "they want to book it. "
-                "The patient and selected slot are maintained "
-                "internally by the application."
+                "Create the appointment using the patient and "
+                "slot already selected internally. "
+                "Only call this after the user has explicitly "
+                "confirmed the selected appointment."
             ),
             "parameters": {
                 "type": "object",
@@ -481,7 +486,6 @@ def execute_tool(tool_call, cursor):
 
     arguments_raw = tool_call.function.arguments or "{}"
 
-    # Solo mostramos esto para select_slot.
     if function_name == "select_slot":
 
         debug_slot(
@@ -534,7 +538,6 @@ def execute_tool(tool_call, cursor):
             "error": f"Unknown tool {function_name}"
         }
 
-    # Solo mostramos el resultado de select_slot.
     if function_name == "select_slot":
 
         debug_slot(
@@ -667,43 +670,61 @@ APPOINTMENT SEARCH:
 
 14. Present available appointments in Spanish.
 
-15. Do not expose technical identifiers unless necessary.
+15. Do not expose technical identifiers to the user.
 
 SLOT SELECTION:
 
-16. If the user chooses an available appointment,
-    call select_slot.
+16. If the user chooses one of the available appointments,
+    call select_slot using the exact internal slot_id
+    returned by get_available_slots.
 
-17. After select_slot, tell the user which appointment
-    has been selected and ask explicitly whether they
-    want to confirm the booking.
+17. After select_slot succeeds, the slot is considered
+    selected and remains selected until the user chooses
+    a different slot or the appointment is created.
+
+18. After select_slot succeeds, tell the user which
+    appointment has been selected and ask explicitly
+    whether they want to confirm the booking.
+
+19. If a slot is already selected and the user explicitly
+    confirms the booking, DO NOT call select_slot again.
+    Call create_appointment directly.
+
+20. A confirmation after a selected slot includes
+    expressions such as:
+    "sí", "si", "sí quiero", "confirmo", "adelante",
+    "resérvala", "quiero esa", "de acuerdo", or
+    equivalent wording.
+
+21. When the user confirms an already selected slot,
+    do not search for specialties again and do not
+    search for available slots again unless the user
+    explicitly asks to change the appointment.
+
+22. Do not call create_appointment merely because the
+    user selected a slot. The user must explicitly
+    confirm the booking.
+
+23. If the user says no, do not create an appointment.
+
+24. If the user wants another appointment or asks to see
+    more options, do not create the appointment. The user
+    must select another slot first.
 
 CREATING THE APPOINTMENT:
 
-18. Only call create_appointment after the user has
+25. Only call create_appointment after the user has
     explicitly confirmed that they want to book the
-    selected appointment.
+    currently selected appointment.
 
-19. A positive confirmation includes expressions such as:
-    "sí", "si", "sí quiero", "confirmo", "adelante",
-    "resérvala", "quiero esa", or equivalent wording.
+26. The selected patient and slot are managed internally
+    by the application. Never ask the user for their IDs.
 
-20. Do not call create_appointment merely because the
-    user selected a slot.
-
-21. If the user says no, do not create an appointment.
-
-22. If the user wants another appointment or asks to see
-    more options, do not create the appointment.
-
-23. The selected patient and slot are managed internally
-    by the application. Never invent their identifiers.
-
-24. After create_appointment succeeds, tell the user that
+27. After create_appointment succeeds, tell the user that
     the appointment has been booked and provide the
     relevant appointment details.
 
-25. Never display tool calls, function names, JSON,
+28. Never display tool calls, function names, JSON,
     or internal execution syntax to the user.
 """
 
@@ -751,8 +772,12 @@ CREATING THE APPOINTMENT:
                 {
                     "role": "system",
                     "content": (
-                        "There is currently a selected appointment "
-                        "slot: "
+                        "IMPORTANT: There is currently a selected "
+                        "appointment slot. If the user confirms "
+                        "the booking, call create_appointment "
+                        "directly. Do not call select_slot again "
+                        "for this already selected slot. "
+                        f"The selected appointment is "
                         f"{slot['doctor_name']} on "
                         f"{slot['appointment_date']} at "
                         f"{slot['start_time']}. "
@@ -863,3 +888,4 @@ CREATING THE APPOINTMENT:
 
         st.error(type(e).__name__)
         st.error(str(e))
+        
