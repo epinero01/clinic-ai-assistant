@@ -1,11 +1,24 @@
 import json
+import uuid
+from datetime import datetime
+
 import streamlit as st
 from openai import OpenAI
 from databricks import sql
 
+
 MODEL = "workspace.clinic_ai.clinic_ai_service_model"
 
-st.set_page_config(page_title="Clinic AI", page_icon="🏥")
+
+# ============================================================
+# PAGE
+# ============================================================
+
+st.set_page_config(
+    page_title="Clinic AI",
+    page_icon="🏥"
+)
+
 st.title("🏥 Clinic AI")
 
 
@@ -31,11 +44,6 @@ if "patient" not in st.session_state:
 # ============================================================
 
 def find_patient(cursor, first_name, last_name, birth_date=None):
-    """
-    Find a patient by first name and last name.
-    If there are multiple matches, birth_date can be used
-    to disambiguate.
-    """
 
     query = """
         SELECT
@@ -58,6 +66,7 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
         query += """
           AND birth_date = %(birth_date)s
         """
+
         params["birth_date"] = birth_date
 
     query += """
@@ -65,9 +74,11 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
     """
 
     cursor.execute(query, params)
+
     rows = cursor.fetchall()
 
     if not rows:
+
         st.session_state.patient = None
 
         return {
@@ -76,6 +87,7 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
         }
 
     if len(rows) > 1:
+
         st.session_state.patient = None
 
         return {
@@ -112,8 +124,11 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
 # ============================================================
 
 def get_specialties(cursor):
+
     cursor.execute("""
-        SELECT specialty_id, specialty_name
+        SELECT
+            specialty_id,
+            specialty_name
         FROM workspace.clinic_ai.specialties
         WHERE active = true
         ORDER BY specialty_name
@@ -135,6 +150,7 @@ def get_specialties(cursor):
 # ============================================================
 
 def get_available_slots(cursor, specialty_id):
+
     cursor.execute("""
         SELECT
             d.doctor_id,
@@ -180,6 +196,7 @@ def get_available_slots(cursor, specialty_id):
 # ============================================================
 
 def select_slot(slot_id):
+
     for slot in st.session_state.available_slots:
 
         if slot["slot_id"] == slot_id:
@@ -197,6 +214,77 @@ def select_slot(slot_id):
 
 
 # ============================================================
+# CREATE APPOINTMENT
+# ============================================================
+
+def create_appointment(cursor):
+
+    patient = st.session_state.patient
+    slot = st.session_state.selected_slot
+
+    if not patient:
+        return {
+            "status": "error",
+            "message": "No patient has been identified."
+        }
+
+    if not slot:
+        return {
+            "status": "error",
+            "message": "No appointment slot has been selected."
+        }
+
+    appointment_id = str(uuid.uuid4())
+
+    now = datetime.now()
+
+    cursor.execute("""
+        INSERT INTO workspace.clinic_ai.appointments (
+            appointment_id,
+            patient_id,
+            slot_id,
+            appointment_reason,
+            appointment_type,
+            status,
+            notes,
+            created_at,
+            updated_at
+        )
+        VALUES (
+            %(appointment_id)s,
+            %(patient_id)s,
+            %(slot_id)s,
+            %(appointment_reason)s,
+            %(appointment_type)s,
+            %(status)s,
+            %(notes)s,
+            %(created_at)s,
+            %(updated_at)s
+        )
+    """, {
+        "appointment_id": appointment_id,
+        "patient_id": patient["patient_id"],
+        "slot_id": slot["slot_id"],
+        "appointment_reason": None,
+        "appointment_type": "STANDARD",
+        "status": "CONFIRMED",
+        "notes": None,
+        "created_at": now,
+        "updated_at": now
+    })
+
+    return {
+        "status": "created",
+        "appointment_id": appointment_id,
+        "patient": {
+            "first_name": patient["first_name"],
+            "last_name": patient["last_name"]
+        },
+        "slot": slot
+    }
+
+
+# ============================================================
 # TOOLS
 # ============================================================
 
@@ -208,7 +296,7 @@ TOOLS = [
             "name": "find_patient",
             "description": (
                 "Find an active patient in the clinic database "
-                "using their first name and last name. "
+                "using first name and last name. "
                 "If multiple patients have the same name, "
                 "birth date can be used to identify the correct patient."
             ),
@@ -228,7 +316,7 @@ TOOLS = [
                         "description": (
                             "Patient's birth date in YYYY-MM-DD format. "
                             "Only use when needed to distinguish "
-                            "between multiple patients with the same name."
+                            "between multiple patients."
                         )
                     }
                 },
@@ -257,7 +345,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_available_slots",
-            "description": "Retrieve appointment slots for a specialty.",
+            "description": (
+                "Retrieve available appointment slots "
+                "for a medical specialty."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -290,6 +381,25 @@ TOOLS = [
                 "required": [
                     "slot_id"
                 ]
+            }
+        }
+    },
+
+    {
+        "type": "function",
+        "function": {
+            "name": "create_appointment",
+            "description": (
+                "Create the appointment after the patient has "
+                "selected a slot and explicitly confirmed that "
+                "they want to book it. "
+                "The patient and selected slot are maintained "
+                "internally by the application."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     }
@@ -332,6 +442,12 @@ def execute_tool(tool_call, cursor):
 
         return select_slot(
             arguments["slot_id"]
+        )
+
+    if function_name == "create_appointment":
+
+        return create_appointment(
+            cursor
         )
 
     return {
@@ -414,9 +530,9 @@ if prompt and ai_token and hostname and http_path and sql_token:
         cursor = conn.cursor()
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # SYSTEM PROMPT
-        # ----------------------------------------------------
+        # ====================================================
 
         system_prompt = """
 You are a medical appointment assistant.
@@ -424,64 +540,80 @@ You are a medical appointment assistant.
 The clinic database is the only source of truth.
 Do not use external knowledge or external search.
 
-IMPORTANT PATIENT IDENTIFICATION RULES:
+PATIENT IDENTIFICATION:
 
 1. Before helping the user search for an appointment,
    make sure the patient has been identified.
 
-2. If the patient has not yet been identified,
-   ask the user for their first name and last name.
+2. If the patient has not been identified,
+   ask for first name and last name.
 
-3. Once the user provides the first name and last name,
-   call find_patient.
+3. Once the user provides them, call find_patient.
 
-4. If find_patient returns exactly one patient,
-   consider that patient identified and continue.
+4. If exactly one patient is found, consider the patient
+   identified and continue.
 
-5. If find_patient returns multiple patients,
-   ask the user for their date of birth to distinguish them,
-   then call find_patient again using the birth date.
+5. If multiple patients are found with the same name,
+   ask for the date of birth and call find_patient again.
 
-6. If the patient is not found,
-   tell the user that no matching active patient was found
-   and ask them to check the information.
+6. If no patient is found, tell the user and ask them
+   to check the information.
 
-7. Do not ask the user for patient_id.
-   patient_id is an internal database identifier.
+7. Never ask the user for patient_id.
 
-8. Do not continue to appointment search until the patient
-   has been successfully identified.
+APPOINTMENT SEARCH:
 
-APPOINTMENT SEARCH RULES:
+8. Once the patient is identified, use get_specialties.
 
-9. Once the patient is identified, use get_specialties
-   to retrieve the available medical specialties.
+9. Never invent specialties.
 
-10. Never invent specialties.
+10. Use only specialties returned by the database.
 
-11. Use only specialties returned by the catalog.
+11. Once the specialty is known, call get_available_slots.
 
-12. Once the specialty is known, call get_available_slots.
+12. Never invent appointment slots.
 
-13. Never invent appointment slots.
+13. Use only slots returned by get_available_slots.
 
-14. Use only slots returned by get_available_slots.
+14. Present available appointments in Spanish.
 
-15. Present available appointments in Spanish.
+15. Do not expose technical identifiers unless necessary.
 
-16. Do not expose internal technical identifiers unless
-    they are necessary for the interaction.
+SLOT SELECTION:
 
-17. If the user chooses a specific appointment,
+16. If the user chooses an available appointment,
     call select_slot.
 
-18. After selecting a slot, confirm which appointment
-    was selected and ask the user if they want to proceed.
+17. After select_slot, tell the user which appointment
+    has been selected and ask explicitly whether they
+    want to confirm the booking.
 
-19. Do not create or save an appointment yet.
-    There is currently no tool for creating appointments.
+CREATING THE APPOINTMENT:
 
-20. Never display tool calls, function names, JSON,
+18. Only call create_appointment after the user has
+    explicitly confirmed that they want to book the
+    selected appointment.
+
+19. A positive confirmation includes expressions such as:
+    "sí", "si", "sí quiero", "confirmo", "adelante",
+    "resérvala", "quiero esa", or equivalent wording.
+
+20. Do not call create_appointment merely because the
+    user selected a slot.
+
+21. If the user says no, do not create an appointment.
+
+22. If the user wants another appointment or asks to see
+    more options, do not create the appointment.
+
+23. The selected patient and slot are managed internally
+    by the application. Never invent their identifiers.
+
+24. After create_appointment succeeds, tell the user that
+    the appointment has been booked and provide the
+    relevant appointment details.
+
+25. Never display tool calls, function names, JSON,
     or internal execution syntax to the user.
 """
 
@@ -494,9 +626,9 @@ APPOINTMENT SEARCH RULES:
         ]
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # CURRENT PATIENT CONTEXT
-        # ----------------------------------------------------
+        # ====================================================
 
         if st.session_state.patient:
 
@@ -510,25 +642,48 @@ APPOINTMENT SEARCH RULES:
                         f"{patient['first_name']} "
                         f"{patient['last_name']}, "
                         f"birth date {patient['birth_date']}. "
-                        "The patient_id is an internal value and "
-                        "must not be requested from the user."
+                        "The patient_id is internal and must "
+                        "never be requested from the user."
                     )
                 }
             )
 
 
-        # ----------------------------------------------------
+        # ====================================================
+        # CURRENT SELECTED SLOT CONTEXT
+        # ====================================================
+
+        if st.session_state.selected_slot:
+
+            slot = st.session_state.selected_slot
+
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "There is currently a selected appointment "
+                        "slot: "
+                        f"{slot['doctor_name']} on "
+                        f"{slot['appointment_date']} at "
+                        f"{slot['start_time']}. "
+                        "The slot identifier is internal."
+                    )
+                }
+            )
+
+
+        # ====================================================
         # CONVERSATION HISTORY
-        # ----------------------------------------------------
+        # ====================================================
 
         messages.extend(
             st.session_state.messages
         )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # AGENT / TOOL LOOP
-        # ----------------------------------------------------
+        # ====================================================
 
         while True:
 
@@ -553,7 +708,7 @@ APPOINTMENT SEARCH RULES:
 
 
             # ------------------------------------------------
-            # ASSISTANT TOOL CALL MESSAGE
+            # ASSISTANT TOOL CALL
             # ------------------------------------------------
 
             messages.append(
@@ -598,9 +753,9 @@ APPOINTMENT SEARCH RULES:
                 )
 
 
-        # ----------------------------------------------------
+        # ====================================================
         # SAVE FINAL ANSWER
-        # ----------------------------------------------------
+        # ====================================================
 
         st.session_state.messages.append(
             {
