@@ -7,12 +7,11 @@ from openai import OpenAI
 from databricks import sql
 
 
+# ============================================================
+# CONFIG
+# ============================================================
+
 MODEL = "workspace.clinic_ai.clinic_ai_service_model"
-
-
-# ============================================================
-# PAGE
-# ============================================================
 
 st.set_page_config(
     page_title="Clinic AI",
@@ -47,162 +46,158 @@ DEBUG_SLOT = True
 
 
 def debug_slot(label, value=None):
-
     if DEBUG_SLOT:
-
         if value is None:
             st.write(f"🔎 SLOT DEBUG: {label}")
-
         else:
-            st.write(
-                f"🔎 SLOT DEBUG: {label}",
-                value
-            )
+            st.write(f"🔎 SLOT DEBUG: {label}", value)
 
 
 # ============================================================
-# PATIENT
+# DATABASE CONNECTION
 # ============================================================
 
-def find_patient(cursor, first_name, last_name, birth_date=None):
+def get_sql_connection():
+    return sql.connect(
+        server_hostname=st.session_state.sql_hostname,
+        http_path=st.session_state.sql_http_path,
+        access_token=st.session_state.sql_token
+    )
+
+
+# ============================================================
+# TOOL 1 - FIND PATIENT
+# ============================================================
+
+def find_patient(first_name, last_name, birth_date=None):
 
     query = """
         SELECT
             patient_id,
             first_name,
             last_name,
-            birth_date
+            birth_date,
+            gender,
+            email,
+            phone,
+            preferred_language,
+            insurance_id
         FROM workspace.clinic_ai.patients
-        WHERE active = true
-          AND LOWER(first_name) = LOWER(%(first_name)s)
+        WHERE LOWER(first_name) = LOWER(%(first_name)s)
           AND LOWER(last_name) = LOWER(%(last_name)s)
+          AND active = true
     """
 
     params = {
-        "first_name": first_name.strip(),
-        "last_name": last_name.strip()
+        "first_name": first_name,
+        "last_name": last_name
     }
 
     if birth_date:
-
         query += """
           AND birth_date = %(birth_date)s
         """
-
         params["birth_date"] = birth_date
 
     query += """
         ORDER BY birth_date
     """
 
-    cursor.execute(
-        query,
-        params
-    )
+    conn = get_sql_connection()
 
-    rows = cursor.fetchall()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
 
-    if not rows:
+            rows = cursor.fetchall()
 
-        st.session_state.patient = None
+            columns = [
+                "patient_id",
+                "first_name",
+                "last_name",
+                "birth_date",
+                "gender",
+                "email",
+                "phone",
+                "preferred_language",
+                "insurance_id"
+            ]
 
-        return {
-            "status": "not_found",
-            "message": "No active patient was found with those details."
-        }
-
-    if len(rows) > 1:
-
-        st.session_state.patient = None
-
-        return {
-            "status": "multiple_matches",
-            "patients": [
-                {
-                    "first_name": row[1],
-                    "last_name": row[2],
-                    "birth_date": str(row[3])
-                }
+            patients = [
+                dict(zip(columns, row))
                 for row in rows
             ]
-        }
 
-    row = rows[0]
+            if len(patients) == 1:
+                st.session_state.patient = patients[0]
 
-    patient = {
-        "patient_id": row[0],
-        "first_name": row[1],
-        "last_name": row[2],
-        "birth_date": str(row[3])
-    }
+            return {
+                "count": len(patients),
+                "patients": patients
+            }
 
-    st.session_state.patient = patient
-
-    return {
-        "status": "found",
-        "patient": patient
-    }
+    finally:
+        conn.close()
 
 
 # ============================================================
-# SPECIALTIES
+# TOOL 2 - GET SPECIALTIES
 # ============================================================
 
-def get_specialties(cursor):
+def get_specialties():
 
     query = """
         SELECT
             specialty_id,
-            specialty_name
+            specialty_name,
+            description
         FROM workspace.clinic_ai.specialties
         WHERE active = true
         ORDER BY specialty_name
     """
 
-    cursor.execute(query)
+    conn = get_sql_connection()
 
-    rows = cursor.fetchall()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query)
 
-    result = [
-        {
-            "specialty_id": row[0],
-            "specialty_name": row[1]
-        }
-        for row in rows
-    ]
+            rows = cursor.fetchall()
 
-    return result
+            columns = [
+                "specialty_id",
+                "specialty_name",
+                "description"
+            ]
+
+            specialties = [
+                dict(zip(columns, row))
+                for row in rows
+            ]
+
+            return {
+                "count": len(specialties),
+                "specialties": specialties
+            }
+
+    finally:
+        conn.close()
 
 
 # ============================================================
-# AVAILABLE SLOTS
+# TOOL 3 - GET AVAILABLE SLOTS
 # ============================================================
 
-def get_available_slots(cursor, specialty_id):
+def get_available_slots(specialty_id):
 
-    debug_slot(
-        "get_available_slots() called"
-    )
-
-    debug_slot(
-        "specialty_id received",
-        repr(specialty_id)
-    )
-
-    debug_slot(
-        "specialty_id type",
-        type(specialty_id).__name__
-    )
-
-    # TEMPORARY TEST:
-    # The previous version used a parameterized query here.
-    # Direct SQL with 'CARD' worked correctly, so for now
-    # we embed the received specialty_id directly into the SQL
-    # to isolate the parameter-binding problem.
+    debug_slot("get_available_slots() called")
+    debug_slot("specialty_id received", repr(specialty_id))
+    debug_slot("specialty_id type", type(specialty_id).__name__)
 
     specialty_id = str(specialty_id).strip()
 
-    # Escape single quotes before embedding the value.
+    # Workaround temporal para evitar el problema de binding
+    # que tuvimos con valores como CARD.
     specialty_id_sql = specialty_id.replace("'", "''")
 
     query = f"""
@@ -210,9 +205,11 @@ def get_available_slots(cursor, specialty_id):
             d.doctor_id,
             d.first_name,
             d.last_name,
+            d.specialty_id,
             ds.slot_id,
             ds.appointment_date,
-            ds.start_time
+            ds.start_time,
+            ds.end_time
         FROM workspace.clinic_ai.doctors d
         INNER JOIN workspace.clinic_ai.doctor_schedule ds
             ON d.doctor_id = ds.doctor_id
@@ -221,93 +218,83 @@ def get_available_slots(cursor, specialty_id):
           AND ds.slot_status = 'AVAILABLE'
         ORDER BY
             ds.appointment_date,
-            ds.start_time
-        LIMIT 20
+            ds.start_time,
+            d.last_name,
+            d.first_name
     """
 
-    debug_slot(
-        "get_available_slots SQL",
-        query
-    )
+    debug_slot("get_available_slots SQL", query)
 
-    cursor.execute(query)
+    conn = get_sql_connection()
 
-    rows = cursor.fetchall()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query)
 
-    debug_slot(
-        "get_available_slots rows",
-        rows
-    )
+            rows = cursor.fetchall()
 
-    result = [
-        {
-            "doctor_id": row[0],
-            "doctor_name": f"{row[1]} {row[2]}",
-            "slot_id": row[3],
-            "appointment_date": str(row[4]),
-            "start_time": row[5]
-        }
-        for row in rows
-    ]
+            columns = [
+                "doctor_id",
+                "first_name",
+                "last_name",
+                "specialty_id",
+                "slot_id",
+                "appointment_date",
+                "start_time",
+                "end_time"
+            ]
 
-    debug_slot(
-        "get_available_slots result",
-        result
-    )
+            slots = [
+                dict(zip(columns, row))
+                for row in rows
+            ]
 
-    st.session_state.available_slots = result
+            st.session_state.available_slots = slots
 
-    return result
+            debug_slot(
+                "available_slots returned",
+                slots
+            )
+
+            return {
+                "count": len(slots),
+                "slots": slots
+            }
+
+    finally:
+        conn.close()
 
 
 # ============================================================
-# SELECT SLOT
+# TOOL 4 - SELECT SLOT
 # ============================================================
 
 def select_slot(slot_id):
 
-    debug_slot(
-        "select_slot() called"
-    )
-
-    debug_slot(
-        "slot_id received",
-        repr(slot_id)
-    )
-
-    debug_slot(
-        "slot_id type",
-        type(slot_id).__name__
-    )
-
+    debug_slot("select_slot() called")
+    debug_slot("slot_id received", repr(slot_id))
+    debug_slot("slot_id type", type(slot_id).__name__)
     debug_slot(
         "available_slots before selection",
         st.session_state.available_slots
     )
 
-    # ========================================================
-    # USER-FACING OPTION NUMBER -> INTERNAL SLOT
-    # ========================================================
-
     try:
-
         option_number = int(str(slot_id).strip())
-
     except (TypeError, ValueError):
-
         option_number = None
+
+    # --------------------------------------------------------
+    # User selected the numbered option shown by the agent
+    # --------------------------------------------------------
 
     if option_number is not None:
 
         index = option_number - 1
 
-        if 0 <= index < len(
-            st.session_state.available_slots
-        ):
+        if 0 <= index < len(st.session_state.available_slots):
 
-            selected = (
-                st.session_state.available_slots[index]
-            )
+            selected = st.session_state.available_slots[index]
 
             st.session_state.selected_slot = selected
 
@@ -334,10 +321,9 @@ def select_slot(slot_id):
             "message": "The selected option is not valid."
         }
 
-    # ========================================================
-    # FALLBACK:
-    # Accept an actual internal slot_id as well.
-    # ========================================================
+    # --------------------------------------------------------
+    # Internal slot_id
+    # --------------------------------------------------------
 
     for slot in st.session_state.available_slots:
 
@@ -366,23 +352,25 @@ def select_slot(slot_id):
 
 
 # ============================================================
-# CREATE APPOINTMENT
+# TOOL 5 - CREATE APPOINTMENT
 # ============================================================
 
-def create_appointment(cursor):
+def create_appointment(
+    appointment_reason=None,
+    appointment_type=None,
+    notes=None
+):
 
     patient = st.session_state.patient
-    slot = st.session_state.selected_slot
+    selected_slot = st.session_state.selected_slot
 
     if not patient:
-
         return {
             "status": "error",
             "message": "No patient has been identified."
         }
 
-    if not slot:
-
+    if not selected_slot:
         return {
             "status": "error",
             "message": "No appointment slot has been selected."
@@ -391,18 +379,6 @@ def create_appointment(cursor):
     appointment_id = str(uuid.uuid4())
 
     now = datetime.now()
-
-    params = {
-        "appointment_id": appointment_id,
-        "patient_id": patient["patient_id"],
-        "slot_id": slot["slot_id"],
-        "appointment_reason": None,
-        "appointment_type": "STANDARD",
-        "status": "CONFIRMED",
-        "notes": None,
-        "created_at": now,
-        "updated_at": now
-    }
 
     query = """
         INSERT INTO workspace.clinic_ai.appointments (
@@ -429,24 +405,50 @@ def create_appointment(cursor):
         )
     """
 
-    cursor.execute(
-        query,
-        params
-    )
-
-    return {
-        "status": "created",
+    params = {
         "appointment_id": appointment_id,
-        "patient": {
-            "first_name": patient["first_name"],
-            "last_name": patient["last_name"]
-        },
-        "slot": slot
+        "patient_id": patient["patient_id"],
+        "slot_id": selected_slot["slot_id"],
+        "appointment_reason": appointment_reason,
+        "appointment_type": appointment_type,
+        "status": "CONFIRMED",
+        "notes": notes,
+        "created_at": now,
+        "updated_at": now
     }
+
+    conn = get_sql_connection()
+
+    try:
+
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
+
+        return {
+            "status": "confirmed",
+            "appointment": {
+                "appointment_id": appointment_id,
+                "patient": {
+                    "first_name": patient["first_name"],
+                    "last_name": patient["last_name"]
+                },
+                "doctor": {
+                    "first_name": selected_slot["first_name"],
+                    "last_name": selected_slot["last_name"]
+                },
+                "appointment_date": selected_slot["appointment_date"],
+                "start_time": selected_slot["start_time"],
+                "end_time": selected_slot["end_time"],
+                "slot_id": selected_slot["slot_id"]
+            }
+        }
+
+    finally:
+        conn.close()
 
 
 # ============================================================
-# TOOLS
+# TOOL DEFINITIONS
 # ============================================================
 
 TOOLS = [
@@ -456,10 +458,8 @@ TOOLS = [
         "function": {
             "name": "find_patient",
             "description": (
-                "Find an active patient in the clinic database "
-                "using first name and last name. "
-                "If multiple patients have the same name, "
-                "birth date can be used to identify the correct patient."
+                "Find a patient using first name, last name "
+                "and optionally date of birth."
             ),
             "parameters": {
                 "type": "object",
@@ -471,7 +471,8 @@ TOOLS = [
                         "type": "string"
                     },
                     "birth_date": {
-                        "type": "string"
+                        "type": "string",
+                        "description": "YYYY-MM-DD"
                     }
                 },
                 "required": [
@@ -486,11 +487,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_specialties",
-            "description": "Retrieve the catalog of medical specialties.",
+            "description": (
+                "Return the medical specialties available "
+                "in the clinic."
+            ),
             "parameters": {
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {}
             }
         }
     },
@@ -500,8 +503,8 @@ TOOLS = [
         "function": {
             "name": "get_available_slots",
             "description": (
-                "Retrieve available appointment slots "
-                "for a medical specialty."
+                "Return available appointment slots for a "
+                "given specialty_id."
             ),
             "parameters": {
                 "type": "object",
@@ -522,11 +525,9 @@ TOOLS = [
         "function": {
             "name": "select_slot",
             "description": (
-                "Select an appointment option previously "
-                "shown to the user. "
-                "The slot_id argument should normally be "
-                "the numeric option number shown to the user, "
-                "such as '1', '2', or '3'."
+                "Select an appointment slot. The slot_id argument "
+                "should normally be the numeric option number shown "
+                "to the user, such as '1', '2', or '3'."
             ),
             "parameters": {
                 "type": "object",
@@ -547,16 +548,24 @@ TOOLS = [
         "function": {
             "name": "create_appointment",
             "description": (
-                "Create the appointment after the patient has "
-                "selected a slot and explicitly confirmed that "
-                "they want to book it. "
-                "The patient and selected slot are maintained "
-                "internally by the application."
+                "Create and confirm the appointment for the "
+                "currently identified patient and currently "
+                "selected slot. Only call this after the user "
+                "has explicitly confirmed the booking."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {},
-                "required": []
+                "properties": {
+                    "appointment_reason": {
+                        "type": "string"
+                    },
+                    "appointment_type": {
+                        "type": "string"
+                    },
+                    "notes": {
+                        "type": "string"
+                    }
+                }
             }
         }
     }
@@ -567,334 +576,211 @@ TOOLS = [
 # TOOL EXECUTION
 # ============================================================
 
-def execute_tool(tool_call, cursor):
+def execute_tool(name, arguments):
 
-    function_name = tool_call.function.name
+    args = json.loads(arguments) if isinstance(arguments, str) else arguments
 
-    arguments_raw = tool_call.function.arguments or "{}"
+    if name == "find_patient":
+        return find_patient(**args)
 
-    if function_name == "select_slot":
+    if name == "get_specialties":
+        return get_specialties()
 
-        debug_slot(
-            "MODEL TOOL CALL",
-            {
-                "function": function_name,
-                "raw_arguments": arguments_raw
-            }
-        )
+    if name == "get_available_slots":
+        return get_available_slots(**args)
 
-    arguments = json.loads(
-        arguments_raw
+    if name == "select_slot":
+        return select_slot(**args)
+
+    if name == "create_appointment":
+        return create_appointment(**args)
+
+    return {
+        "status": "error",
+        "message": f"Unknown tool: {name}"
+    }
+
+
+# ============================================================
+# SIDEBAR - CONNECTION
+# ============================================================
+
+with st.sidebar:
+
+    st.header("Databricks connection")
+
+    ai_token = st.text_input(
+        "AI Token",
+        type="password"
     )
 
-    if function_name == "find_patient":
-
-        result = find_patient(
-            cursor,
-            arguments["first_name"],
-            arguments["last_name"],
-            arguments.get("birth_date")
-        )
-
-    elif function_name == "get_specialties":
-
-        result = get_specialties(cursor)
-
-    elif function_name == "get_available_slots":
-
-        result = get_available_slots(
-            cursor,
-            arguments["specialty_id"]
-        )
-
-    elif function_name == "select_slot":
-
-        result = select_slot(
-            arguments["slot_id"]
-        )
-
-    elif function_name == "create_appointment":
-
-        result = create_appointment(
-            cursor
-        )
-
-    else:
-
-        result = {
-            "error": f"Unknown tool {function_name}"
-        }
-
-    if function_name == "select_slot":
-
-        debug_slot(
-            "MODEL RECEIVES TOOL RESULT",
-            result
-        )
-
-    return result
-
-
-# ============================================================
-# CONNECTION PARAMETERS
-# ============================================================
-
-ai_token = st.text_input(
-    "AI Token",
-    type="password"
-)
-
-hostname = st.text_input(
-    "SQL Hostname"
-)
-
-http_path = st.text_input(
-    "SQL HTTP Path"
-)
-
-sql_token = st.text_input(
-    "SQL Token",
-    type="password"
-)
-
-
-# ============================================================
-# CHAT HISTORY
-# ============================================================
-
-for msg in st.session_state.messages:
-
-    if msg["role"] in ["user", "assistant"]:
-
-        with st.chat_message(msg["role"]):
-            st.write(msg["content"])
-
-
-prompt = st.chat_input(
-    "¿Cómo puedo ayudarte?"
-)
-
-
-# ============================================================
-# MAIN AGENT LOOP
-# ============================================================
-
-if prompt and ai_token and hostname and http_path and sql_token:
-
-    st.session_state.messages.append(
-        {
-            "role": "user",
-            "content": prompt
-        }
+    sql_hostname = st.text_input(
+        "SQL Hostname"
     )
 
-    with st.chat_message("user"):
-        st.write(prompt)
+    sql_http_path = st.text_input(
+        "SQL HTTP Path"
+    )
 
-    try:
+    sql_token = st.text_input(
+        "SQL Token",
+        type="password"
+    )
 
-        client = OpenAI(
-            api_key=ai_token,
-            base_url=(
-                "https://dbc-3bb54e54-c2b6.cloud.databricks.com/"
-                "ai-gateway/mlflow/v1"
-            )
-        )
-
-        conn = sql.connect(
-            server_hostname=hostname,
-            http_path=http_path,
-            access_token=sql_token
-        )
-
-        cursor = conn.cursor()
+    st.session_state.sql_hostname = sql_hostname
+    st.session_state.sql_http_path = sql_http_path
+    st.session_state.sql_token = sql_token
 
 
-        # ====================================================
-        # SYSTEM PROMPT
-        # ====================================================
+# ============================================================
+# OPENAI CLIENT
+# ============================================================
 
-        system_prompt = """
+client = OpenAI(
+    api_key=ai_token,
+    base_url=(
+        "https://dbc-3bb54e54-c2b6.cloud.databricks.com/"
+        "ai-gateway/mlflow/v1"
+    )
+)
+
+
+# ============================================================
+# SYSTEM PROMPT
+# ============================================================
+
+SYSTEM_PROMPT = """
 You are a medical appointment assistant.
 
 LANGUAGE:
-
 Always communicate with the user in Spanish.
 All user-facing messages must be in Spanish.
-Do not switch to English unless the user explicitly
-asks to communicate in English.
+Do not switch to English unless the user explicitly asks to communicate in English.
 
 The clinic database is the only source of truth.
 Do not use external knowledge or external search.
 
 PATIENT IDENTIFICATION:
-
-1. Before helping the user search for an appointment,
-   make sure the patient has been identified.
-
-2. If the patient has not been identified,
-   ask for first name and last name.
-
+1. Before helping the user search for an appointment, make sure the patient has been identified.
+2. If the patient has not been identified, ask for first name and last name.
 3. Once the user provides them, call find_patient.
-
-4. If exactly one patient is found, consider the patient
-   identified and continue.
-
-5. If multiple patients are found with the same name,
-   ask for the date of birth and call find_patient again.
-
-6. If no patient is found, tell the user and ask them
-   to check the information.
-
+4. If exactly one patient is found, consider the patient identified and continue.
+5. If multiple patients have the same name, ask for the date of birth and call find_patient again.
+6. If no patient is found, tell the user and ask them to check the information.
 7. Never ask the user for patient_id.
 
 APPOINTMENT SEARCH:
-
 8. Once the patient is identified, use get_specialties.
-
 9. Never invent specialties.
-
 10. Use only specialties returned by the database.
-
 11. Once the specialty is known, call get_available_slots.
-
 12. Never invent appointment slots.
-
 13. Use only slots returned by get_available_slots.
-
 14. Present available appointments in Spanish.
-
-15. When presenting available appointments, number them
-    sequentially starting at 1.
+15. When presenting available appointments, number them sequentially starting at 1.
 
 SLOT SELECTION:
-
-16. If the user chooses an appointment by its displayed
-    option number, call select_slot using that exact
-    option number as slot_id.
-
-17. Do not convert the option number into an internal
-    slot identifier yourself.
-
-18. After select_slot succeeds, the slot is considered
-    selected and remains selected until the user chooses
-    a different slot or the appointment is created.
-
-19. After select_slot succeeds, tell the user which
-    appointment has been selected and ask explicitly
-    whether they want to confirm the booking.
-
-20. If a slot is already selected and the user explicitly
-    confirms the booking, DO NOT call select_slot again.
-    Call create_appointment directly.
-
-21. A confirmation includes expressions such as:
-    "sí", "si", "sí quiero", "confirmo", "adelante",
-    "resérvala", "quiero esa", "de acuerdo", or
-    equivalent wording.
-
-22. When the user confirms an already selected slot,
-    do not search for specialties again and do not
-    search for available slots again unless the user
-    explicitly asks to change the appointment.
-
-23. Do not call create_appointment merely because the
-    user selected a slot. The user must explicitly
-    confirm the booking.
-
+16. If the user chooses an appointment by its displayed option number, call select_slot using that exact option number as slot_id.
+17. Do not convert the option number into an internal slot identifier yourself.
+18. After select_slot succeeds, the slot is considered selected and remains selected until the user chooses a different slot or the appointment is created.
+19. After select_slot succeeds, tell the user which appointment has been selected and ask explicitly whether they want to confirm the booking.
+20. If a slot is already selected and the user explicitly confirms the booking, DO NOT call select_slot again. Call create_appointment directly.
+21. A confirmation includes expressions such as: "sí", "si", "sí quiero", "confirmo", "adelante", "resérvala", "quiero esa", "de acuerdo", or equivalent wording.
+22. When the user confirms an already selected slot, do not search for specialties again and do not search for available slots again unless the user explicitly asks to change the appointment.
+23. Do not call create_appointment merely because the user selected a slot. The user must explicitly confirm the booking.
 24. If the user says no, do not create the appointment.
-
-25. If the user wants another appointment or asks to see
-    more options, do not create the appointment.
+25. If the user wants another appointment or asks to see more options, do not create the appointment.
 
 CREATING THE APPOINTMENT:
-
-26. Only call create_appointment after the user has
-    explicitly confirmed that they want to book the
-    currently selected appointment.
-
-27. The selected patient and slot are managed internally
-    by the application. Never ask the user for their IDs.
-
-28. After create_appointment succeeds, tell the user that
-    the appointment has been booked and provide the
-    relevant appointment details.
-
-29. Never display tool calls, function names, JSON,
-    or internal execution syntax to the user.
+26. Only call create_appointment after the user has explicitly confirmed that they want to book the currently selected appointment.
+27. The selected patient and slot are managed internally by the application. Never ask the user for their IDs.
+28. After create_appointment succeeds, tell the user that the appointment has been booked and provide the relevant appointment details.
+29. Never display tool calls, function names, JSON, or internal execution syntax to the user.
 """
 
 
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt
-            }
-        ]
+# ============================================================
+# BUILD MESSAGES
+# ============================================================
+
+messages = [
+    {
+        "role": "system",
+        "content": SYSTEM_PROMPT
+    }
+]
 
 
-        # ====================================================
-        # CURRENT PATIENT CONTEXT
-        # ====================================================
+# Current patient context
+if st.session_state.patient:
 
-        if st.session_state.patient:
+    patient = st.session_state.patient
 
-            patient = st.session_state.patient
+    messages.append({
+        "role": "system",
+        "content": f"""
+The currently identified patient is:
+- First name: {patient["first_name"]}
+- Last name: {patient["last_name"]}
+- Birth date: {patient["birth_date"]}
 
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "The currently identified patient is: "
-                        f"{patient['first_name']} "
-                        f"{patient['last_name']}, "
-                        f"birth date {patient['birth_date']}. "
-                        "The patient_id is internal and must "
-                        "never be requested from the user."
-                    )
-                }
-            )
+The patient_id is internal and must never be requested from the user.
+"""
+    })
 
 
-        # ====================================================
-        # CURRENT SELECTED SLOT CONTEXT
-        # ====================================================
+# Current selected slot context
+if st.session_state.selected_slot:
 
-        if st.session_state.selected_slot:
+    slot = st.session_state.selected_slot
 
-            slot = st.session_state.selected_slot
+    messages.append({
+        "role": "system",
+        "content": f"""
+IMPORTANT:
+There is currently a selected appointment slot.
 
-            messages.append(
-                {
-                    "role": "system",
-                    "content": (
-                        "IMPORTANT: There is currently a selected "
-                        "appointment slot. If the user confirms "
-                        "the booking, call create_appointment "
-                        "directly. Do not call select_slot again "
-                        "for this already selected slot. "
-                        f"The selected appointment is "
-                        f"{slot['doctor_name']} on "
-                        f"{slot['appointment_date']} at "
-                        f"{slot['start_time']}. "
-                        "The slot identifier is internal."
-                    )
-                }
-            )
+If the user confirms the booking, call create_appointment directly.
+Do not call select_slot again for this already selected slot.
+
+The selected appointment is:
+- Doctor: {slot["first_name"]} {slot["last_name"]}
+- Date: {slot["appointment_date"]}
+- Start time: {slot["start_time"]}
+- End time: {slot["end_time"]}
+
+The slot identifier is internal.
+"""
+    })
 
 
-        # ====================================================
-        # CONVERSATION HISTORY
-        # ====================================================
-
-        messages.extend(
-            st.session_state.messages
-        )
+messages.extend(st.session_state.messages)
 
 
-        # ====================================================
-        # AGENT / TOOL LOOP
-        # ====================================================
+# ============================================================
+# CHAT INPUT
+# ============================================================
+
+user_input = st.chat_input("¿En qué puedo ayudarte?")
+
+
+# ============================================================
+# PROCESS MESSAGE
+# ============================================================
+
+if user_input:
+
+    st.session_state.messages.append({
+        "role": "user",
+        "content": user_input
+    })
+
+    messages.append({
+        "role": "user",
+        "content": user_input
+    })
+
+    try:
 
         while True:
 
@@ -905,83 +791,93 @@ CREATING THE APPOINTMENT:
                 tool_choice="auto"
             )
 
-            message = response.choices[0].message
-
+            assistant_message = response.choices[0].message
 
             # ------------------------------------------------
-            # NO TOOL CALL
+            # No more tools -> final answer
             # ------------------------------------------------
 
-            if not message.tool_calls:
+            if not assistant_message.tool_calls:
 
-                final_answer = message.content
+                final_answer = assistant_message.content or ""
+
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": final_answer
+                })
+
+                st.chat_message("assistant").write(
+                    final_answer
+                )
 
                 break
 
-
             # ------------------------------------------------
-            # ASSISTANT TOOL CALL
-            # ------------------------------------------------
-
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": tc.id,
-                            "type": "function",
-                            "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
-                            }
-                        }
-                        for tc in message.tool_calls
-                    ]
-                }
-            )
-
-
-            # ------------------------------------------------
-            # EXECUTE TOOLS
+            # Assistant requested tools
             # ------------------------------------------------
 
-            for tool_call in message.tool_calls:
+            tool_calls_for_message = []
 
-                tool_result = execute_tool(
-                    tool_call,
-                    cursor
-                )
+            for tool_call in assistant_message.tool_calls:
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "content": json.dumps(
-                            tool_result,
-                            ensure_ascii=False
-                        )
+                tool_calls_for_message.append({
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments
                     }
+                })
+
+            messages.append({
+                "role": "assistant",
+                "content": assistant_message.content,
+                "tool_calls": tool_calls_for_message
+            })
+
+            # ------------------------------------------------
+            # Execute tools
+            # ------------------------------------------------
+
+            for tool_call in assistant_message.tool_calls:
+
+                tool_name = tool_call.function.name
+                raw_arguments = tool_call.function.arguments
+
+                if DEBUG_SLOT and tool_name == "select_slot":
+
+                    debug_slot(
+                        "MODEL TOOL CALL",
+                        {
+                            "function": tool_name,
+                            "raw_arguments": raw_arguments
+                        }
+                    )
+
+                result = execute_tool(
+                    tool_name,
+                    raw_arguments
                 )
 
+                if DEBUG_SLOT and tool_name == "select_slot":
 
-        # ====================================================
-        # SAVE FINAL ANSWER
-        # ====================================================
+                    debug_slot(
+                        "MODEL RECEIVES TOOL RESULT",
+                        result
+                    )
 
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": final_answer
-            }
-        )
-
-        with st.chat_message("assistant"):
-            st.write(final_answer)
-
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": json.dumps(
+                        result,
+                        default=str,
+                        ensure_ascii=False
+                    )
+                })
 
     except Exception as e:
 
-        st.error(type(e).__name__)
-        st.error(str(e))
-        
+        st.error(
+            f"{type(e).__name__}: {str(e)}"
+        )
