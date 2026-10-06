@@ -194,11 +194,18 @@ def get_available_slots(cursor, specialty_id):
         type(specialty_id).__name__
     )
 
-    # TEMPORARY:
-    # The direct SQL test proved that CARD works correctly
-    # as a literal. We keep this literal for the moment.
+    # TEMPORARY TEST:
+    # The previous version used a parameterized query here.
+    # Direct SQL with 'CARD' worked correctly, so for now
+    # we embed the received specialty_id directly into the SQL
+    # to isolate the parameter-binding problem.
 
-    query = """
+    specialty_id = str(specialty_id).strip()
+
+    # Escape single quotes before embedding the value.
+    specialty_id_sql = specialty_id.replace("'", "''")
+
+    query = f"""
         SELECT
             d.doctor_id,
             d.first_name,
@@ -209,7 +216,7 @@ def get_available_slots(cursor, specialty_id):
         FROM workspace.clinic_ai.doctors d
         INNER JOIN workspace.clinic_ai.doctor_schedule ds
             ON d.doctor_id = ds.doctor_id
-        WHERE d.specialty_id = 'CARD'
+        WHERE d.specialty_id = '{specialty_id_sql}'
           AND d.active = true
           AND ds.slot_status = 'AVAILABLE'
         ORDER BY
@@ -795,7 +802,7 @@ SLOT SELECTION:
     user selected a slot. The user must explicitly
     confirm the booking.
 
-24. If the user says no, do not create an appointment.
+24. If the user says no, do not create the appointment.
 
 25. If the user wants another appointment or asks to see
     more options, do not create the appointment.
