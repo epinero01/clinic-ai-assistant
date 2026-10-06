@@ -4,6 +4,7 @@ import streamlit as st
 from openai import OpenAI
 from databricks import sql
 
+
 # ======================================================
 # CONFIG
 # ======================================================
@@ -16,6 +17,7 @@ st.set_page_config(
 )
 
 st.title("🏥 Clinic AI")
+
 
 # ======================================================
 # SESSION
@@ -30,6 +32,7 @@ if "available_slots" not in st.session_state:
 if "selected_slot" not in st.session_state:
     st.session_state.selected_slot = None
 
+
 # ======================================================
 # TOOLS
 # ======================================================
@@ -40,7 +43,7 @@ def get_specialties(cursor):
         SELECT
             specialty_id,
             specialty_name
-        FROM clinic_ai.specialties
+        FROM workspace.clinic_ai.specialties
         WHERE active = true
         ORDER BY specialty_name
     """)
@@ -66,10 +69,11 @@ def get_available_slots(cursor, specialty_id):
             ds.slot_id,
             ds.appointment_date,
             ds.start_time
-        FROM clinic_ai.doctors d
-        INNER JOIN clinic_ai.doctor_schedule ds
+        FROM workspace.clinic_ai.doctors d
+        INNER JOIN workspace.clinic_ai.doctor_schedule ds
             ON d.doctor_id = ds.doctor_id
         WHERE d.specialty_id = %(specialty_id)s
+          AND d.active = true
           AND ds.slot_status = 'AVAILABLE'
         ORDER BY
             ds.appointment_date,
@@ -114,6 +118,7 @@ def select_slot(slot_id):
         "status": "not_found"
     }
 
+
 # ======================================================
 # TOOL DEFINITIONS
 # ======================================================
@@ -124,11 +129,13 @@ TOOLS = [
         "function": {
             "name": "get_specialties",
             "description": (
-                "Retrieve the catalog of medical specialties."
+                "Retrieve the catalog of medical specialties "
+                "available in the clinic."
             ),
             "parameters": {
                 "type": "object",
-                "properties": {}
+                "properties": {},
+                "required": []
             }
         }
     },
@@ -137,13 +144,18 @@ TOOLS = [
         "function": {
             "name": "get_available_slots",
             "description": (
-                "Retrieve appointment slots for a specialty."
+                "Retrieve appointment slots for a specialty. "
+                "The specialty_id must come from get_specialties."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "specialty_id": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "The specialty_id returned by "
+                            "get_specialties."
+                        )
                     }
                 },
                 "required": [
@@ -164,7 +176,11 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "slot_id": {
-                        "type": "string"
+                        "type": "string",
+                        "description": (
+                            "The slot_id returned by "
+                            "get_available_slots."
+                        )
                     }
                 },
                 "required": [
@@ -174,6 +190,7 @@ TOOLS = [
         }
     }
 ]
+
 
 # ======================================================
 # EXECUTE TOOL
@@ -199,7 +216,7 @@ def execute_tool(tool_call, cursor):
         )
 
     if function_name == "select_slot":
-        
+
         return select_slot(
             arguments["slot_id"]
         )
@@ -207,6 +224,7 @@ def execute_tool(tool_call, cursor):
     return {
         "error": f"Unknown tool {function_name}"
     }
+
 
 # ======================================================
 # CONNECTIONS
@@ -230,6 +248,7 @@ sql_token = st.text_input(
     type="password"
 )
 
+
 # ======================================================
 # CHAT HISTORY
 # ======================================================
@@ -241,6 +260,7 @@ for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
+
 # ======================================================
 # INPUT
 # ======================================================
@@ -249,12 +269,17 @@ prompt = st.chat_input(
     "¿Cómo puedo ayudarte?"
 )
 
+
+# ======================================================
+# MAIN
+# ======================================================
+
 if (
-    prompt and
-    ai_token and
-    hostname and
-    http_path and
-    sql_token
+    prompt
+    and ai_token
+    and hostname
+    and http_path
+    and sql_token
 ):
 
     st.session_state.messages.append(
@@ -267,52 +292,91 @@ if (
     with st.chat_message("user"):
         st.write(prompt)
 
-try:
-    
-client = OpenAI(
-api_key=ai_token,
-base_url="https://dbc-3bb54e54-c2b6.cloud.databricks.com/ai-gateway/mlflow/v1"
-)
+    try:
 
-conn = sql.connect(
-server_hostname=hostname,
-http_path=http_path,
-access_token=sql_token
-)
- 
-cursor = conn.cursor()
- 
-system_prompt = """
+        # ==============================================
+        # OPENAI CLIENT
+        # ==============================================
+
+        client = OpenAI(
+            api_key=ai_token,
+            base_url=(
+                "https://dbc-3bb54e54-c2b6.cloud.databricks.com/"
+                "ai-gateway/mlflow/v1"
+            )
+        )
+
+        # ==============================================
+        # SQL CONNECTION
+        # ==============================================
+
+        conn = sql.connect(
+            server_hostname=hostname,
+            http_path=http_path,
+            access_token=sql_token
+        )
+
+        cursor = conn.cursor()
+
+        # ==============================================
+        # SYSTEM PROMPT
+        # ==============================================
+
+        system_prompt = """
 You are a medical appointment assistant.
- 
+
+All medical specialties and appointment availability must
+come from the tools provided by this application.
+
+Do not use external search or external knowledge to determine
+which specialties or appointments are available.
+
+The clinic database is the only source of truth.
+
 Rules:
- 
+
 1. Never invent specialties.
-2. Always call get_specialties first.
-3. Use only specialties returned by the catalog.
-4. Then call get_available_slots.
+
+2. Always call get_specialties first when the user needs
+   to choose a medical specialty.
+
+3. Use only specialties returned by get_specialties.
+
+4. Then call get_available_slots using the specialty_id
+   returned by get_specialties.
+
 5. Present available appointments in Spanish.
+
 6. Never invent slot identifiers.
-7. Use only slot_id values returned by get_available_slots.
+
+7. Use only slot_id values returned by
+   get_available_slots.
+
 8. If the user chooses a specific appointment,
-call select_slot.
-9. After selecting a slot,
-confirm which slot was selected and ask
-the user if they want to proceed.
+   call select_slot.
+
+9. After selecting a slot, confirm which slot was selected
+   and ask the user if they want to proceed.
+
+10. Answer the user in Spanish.
 """
- 
-messages = [
-{
-"role": "system",
-"content": system_prompt
-},
-*st.session_state.messages
-]
- 
-# ==========================================
-# AGENT LOOP
-# ==========================================
- 
+
+        # ==============================================
+        # MESSAGES
+        # ==============================================
+
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            *st.session_state.messages
+        ]
+
+        # ==============================================
+        # AGENT LOOP
+        # ==============================================
+
         while True:
 
             response = client.chat.completions.create(
@@ -324,27 +388,42 @@ messages = [
 
             message = response.choices[0].message
 
+            # ------------------------------------------
+            # No tool call -> final answer
+            # ------------------------------------------
+
             if not message.tool_calls:
+
                 final_answer = message.content
                 break
+
+            # ------------------------------------------
+            # Add assistant tool call to conversation
+            # ------------------------------------------
 
             messages.append(
                 {
                     "role": "assistant",
-                    "content": None,
+                    "content": message.content,
                     "tool_calls": [
                         {
-                            "id": tc.id,
+                            "id": tool_call.id,
                             "type": "function",
                             "function": {
-                                "name": tc.function.name,
-                                "arguments": tc.function.arguments
+                                "name": tool_call.function.name,
+                                "arguments": (
+                                    tool_call.function.arguments
+                                )
                             }
                         }
-                        for tc in message.tool_calls
+                        for tool_call in message.tool_calls
                     ]
                 }
             )
+
+            # ------------------------------------------
+            # Execute tools
+            # ------------------------------------------
 
             for tool_call in message.tool_calls:
 
@@ -357,9 +436,16 @@ messages = [
                     {
                         "role": "tool",
                         "tool_call_id": tool_call.id,
-                        "content": json.dumps(tool_result)
+                        "content": json.dumps(
+                            tool_result,
+                            ensure_ascii=False
+                        )
                     }
                 )
+
+        # ==============================================
+        # ASSISTANT RESPONSE
+        # ==============================================
 
         st.session_state.messages.append(
             {
