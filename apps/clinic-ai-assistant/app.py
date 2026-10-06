@@ -194,18 +194,9 @@ def get_available_slots(cursor, specialty_id):
         type(specialty_id).__name__
     )
 
-    # ========================================================
-    # TEMPORARY TEST
-    #
-    # We already verified directly in Databricks that:
-    #
-    #     WHERE d.specialty_id = 'CARD'
-    #
-    # works correctly.
-    #
-    # Therefore, for this test we deliberately use the literal
-    # CARD instead of a bound parameter.
-    # ========================================================
+    # TEMPORARY:
+    # The direct SQL test proved that CARD works correctly
+    # as a literal. We keep this literal for the moment.
 
     query = """
         SELECT
@@ -232,41 +223,14 @@ def get_available_slots(cursor, specialty_id):
         query
     )
 
-    try:
+    cursor.execute(query)
 
-        cursor.execute(query)
+    rows = cursor.fetchall()
 
-        debug_slot(
-            "get_available_slots SQL execute",
-            "OK"
-        )
-
-    except Exception as e:
-
-        debug_slot(
-            "get_available_slots SQL execute ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
-
-    try:
-
-        rows = cursor.fetchall()
-
-        debug_slot(
-            "get_available_slots rows",
-            rows
-        )
-
-    except Exception as e:
-
-        debug_slot(
-            "get_available_slots fetchall ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
+    debug_slot(
+        "get_available_slots rows",
+        rows
+    )
 
     result = [
         {
@@ -314,6 +278,60 @@ def select_slot(slot_id):
         st.session_state.available_slots
     )
 
+    # ========================================================
+    # USER-FACING OPTION NUMBER -> INTERNAL SLOT
+    # ========================================================
+
+    try:
+
+        option_number = int(str(slot_id).strip())
+
+    except (TypeError, ValueError):
+
+        option_number = None
+
+    if option_number is not None:
+
+        index = option_number - 1
+
+        if 0 <= index < len(
+            st.session_state.available_slots
+        ):
+
+            selected = (
+                st.session_state.available_slots[index]
+            )
+
+            st.session_state.selected_slot = selected
+
+            debug_slot(
+                "OPTION NUMBER MAPPED TO SLOT",
+                {
+                    "option_number": option_number,
+                    "slot": selected
+                }
+            )
+
+            return {
+                "status": "selected",
+                "slot": selected
+            }
+
+        debug_slot(
+            "OPTION NUMBER OUT OF RANGE",
+            option_number
+        )
+
+        return {
+            "status": "not_found",
+            "message": "The selected option is not valid."
+        }
+
+    # ========================================================
+    # FALLBACK:
+    # Accept an actual internal slot_id as well.
+    # ========================================================
+
     for slot in st.session_state.available_slots:
 
         if slot["slot_id"] == slot_id:
@@ -321,7 +339,7 @@ def select_slot(slot_id):
             st.session_state.selected_slot = slot
 
             debug_slot(
-                "slot FOUND and selected",
+                "INTERNAL SLOT ID FOUND",
                 slot
             )
 
@@ -409,7 +427,7 @@ def create_appointment(cursor):
         params
     )
 
-    result = {
+    return {
         "status": "created",
         "appointment_id": appointment_id,
         "patient": {
@@ -418,8 +436,6 @@ def create_appointment(cursor):
         },
         "slot": slot
     }
-
-    return result
 
 
 # ============================================================
@@ -442,20 +458,13 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "first_name": {
-                        "type": "string",
-                        "description": "Patient's first name."
+                        "type": "string"
                     },
                     "last_name": {
-                        "type": "string",
-                        "description": "Patient's last name."
+                        "type": "string"
                     },
                     "birth_date": {
-                        "type": "string",
-                        "description": (
-                            "Patient's birth date in YYYY-MM-DD format. "
-                            "Only use when needed to distinguish "
-                            "between multiple patients."
-                        )
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -506,10 +515,11 @@ TOOLS = [
         "function": {
             "name": "select_slot",
             "description": (
-                "Select one appointment slot from the slots "
-                "previously returned by get_available_slots. "
-                "The slot_id must be the exact internal slot_id "
-                "returned by get_available_slots."
+                "Select an appointment option previously "
+                "shown to the user. "
+                "The slot_id argument should normally be "
+                "the numeric option number shown to the user, "
+                "such as '1', '2', or '3'."
             ),
             "parameters": {
                 "type": "object",
@@ -566,20 +576,9 @@ def execute_tool(tool_call, cursor):
             }
         )
 
-    try:
-
-        arguments = json.loads(
-            arguments_raw
-        )
-
-    except Exception as e:
-
-        debug_slot(
-            "TOOL ARGUMENT JSON ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
+    arguments = json.loads(
+        arguments_raw
+    )
 
     if function_name == "find_patient":
 
@@ -711,6 +710,13 @@ if prompt and ai_token and hostname and http_path and sql_token:
         system_prompt = """
 You are a medical appointment assistant.
 
+LANGUAGE:
+
+Always communicate with the user in Spanish.
+All user-facing messages must be in Spanish.
+Do not switch to English unless the user explicitly
+asks to communicate in English.
+
 The clinic database is the only source of truth.
 Do not use external knowledge or external search.
 
@@ -751,61 +757,63 @@ APPOINTMENT SEARCH:
 
 14. Present available appointments in Spanish.
 
-15. Do not expose technical identifiers unless necessary.
+15. When presenting available appointments, number them
+    sequentially starting at 1.
 
 SLOT SELECTION:
 
-16. If the user chooses one of the available appointments,
-    call select_slot using the exact internal slot_id
-    returned by get_available_slots.
+16. If the user chooses an appointment by its displayed
+    option number, call select_slot using that exact
+    option number as slot_id.
 
-17. After select_slot succeeds, the slot is considered
+17. Do not convert the option number into an internal
+    slot identifier yourself.
+
+18. After select_slot succeeds, the slot is considered
     selected and remains selected until the user chooses
     a different slot or the appointment is created.
 
-18. After select_slot succeeds, tell the user which
+19. After select_slot succeeds, tell the user which
     appointment has been selected and ask explicitly
     whether they want to confirm the booking.
 
-19. If a slot is already selected and the user explicitly
+20. If a slot is already selected and the user explicitly
     confirms the booking, DO NOT call select_slot again.
     Call create_appointment directly.
 
-20. A confirmation after a selected slot includes
-    expressions such as:
+21. A confirmation includes expressions such as:
     "sí", "si", "sí quiero", "confirmo", "adelante",
     "resérvala", "quiero esa", "de acuerdo", or
     equivalent wording.
 
-21. When the user confirms an already selected slot,
+22. When the user confirms an already selected slot,
     do not search for specialties again and do not
     search for available slots again unless the user
     explicitly asks to change the appointment.
 
-22. Do not call create_appointment merely because the
+23. Do not call create_appointment merely because the
     user selected a slot. The user must explicitly
     confirm the booking.
 
-23. If the user says no, do not create an appointment.
+24. If the user says no, do not create an appointment.
 
-24. If the user wants another appointment or asks to see
-    more options, do not create the appointment. The user
-    must select another slot first.
+25. If the user wants another appointment or asks to see
+    more options, do not create the appointment.
 
 CREATING THE APPOINTMENT:
 
-25. Only call create_appointment after the user has
+26. Only call create_appointment after the user has
     explicitly confirmed that they want to book the
     currently selected appointment.
 
-26. The selected patient and slot are managed internally
+27. The selected patient and slot are managed internally
     by the application. Never ask the user for their IDs.
 
-27. After create_appointment succeeds, tell the user that
+28. After create_appointment succeeds, tell the user that
     the appointment has been booked and provide the
     relevant appointment details.
 
-28. Never display tool calls, function names, JSON,
+29. Never display tool calls, function names, JSON,
     or internal execution syntax to the user.
 """
 
@@ -881,11 +889,7 @@ CREATING THE APPOINTMENT:
         # AGENT / TOOL LOOP
         # ====================================================
 
-        loop_number = 0
-
         while True:
-
-            loop_number += 1
 
             response = client.chat.completions.create(
                 model=MODEL,
