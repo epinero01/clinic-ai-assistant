@@ -40,20 +40,20 @@ if "patient" not in st.session_state:
 
 
 # ============================================================
-# DEBUG
+# SLOT DEBUG
 # ============================================================
 
-DEBUG = True
+DEBUG_SLOT = True
 
 
-def debug(label, value=None):
+def debug_slot(label, value=None):
 
-    if DEBUG:
+    if DEBUG_SLOT:
 
         if value is None:
-            st.write(f"🔎 DEBUG: {label}")
+            st.write(f"🔎 SLOT DEBUG: {label}")
         else:
-            st.write(f"🔎 DEBUG: {label}", value)
+            st.write(f"🔎 SLOT DEBUG: {label}", value)
 
 
 # ============================================================
@@ -61,12 +61,6 @@ def debug(label, value=None):
 # ============================================================
 
 def find_patient(cursor, first_name, last_name, birth_date=None):
-
-    debug("find_patient() called")
-
-    debug("first_name", repr(first_name))
-    debug("last_name", repr(last_name))
-    debug("birth_date", repr(birth_date))
 
     query = """
         SELECT
@@ -97,45 +91,14 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
         ORDER BY birth_date
     """
 
-    debug("find_patient SQL", query)
-    debug("find_patient params", params)
+    cursor.execute(
+        query,
+        params
+    )
 
-    try:
-
-        cursor.execute(
-            query,
-            params
-        )
-
-        debug("find_patient SQL execute: OK")
-
-    except Exception as e:
-
-        debug(
-            "find_patient SQL execute: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
-
-    try:
-
-        rows = cursor.fetchall()
-
-        debug("find_patient rows", rows)
-
-    except Exception as e:
-
-        debug(
-            "find_patient fetchall: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
+    rows = cursor.fetchall()
 
     if not rows:
-
-        debug("find_patient: no rows found")
 
         st.session_state.patient = None
 
@@ -145,11 +108,6 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
         }
 
     if len(rows) > 1:
-
-        debug(
-            "find_patient: multiple rows found",
-            len(rows)
-        )
 
         st.session_state.patient = None
 
@@ -167,8 +125,6 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
 
     row = rows[0]
 
-    debug("find_patient selected row", row)
-
     patient = {
         "patient_id": row[0],
         "first_name": row[1],
@@ -176,14 +132,7 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
         "birth_date": str(row[3])
     }
 
-    debug("patient object", patient)
-
     st.session_state.patient = patient
-
-    debug(
-        "session_state.patient after find_patient",
-        st.session_state.patient
-    )
 
     return {
         "status": "found",
@@ -197,8 +146,6 @@ def find_patient(cursor, first_name, last_name, birth_date=None):
 
 def get_specialties(cursor):
 
-    debug("get_specialties() called")
-
     query = """
         SELECT
             specialty_id,
@@ -208,37 +155,9 @@ def get_specialties(cursor):
         ORDER BY specialty_name
     """
 
-    debug("get_specialties SQL", query)
+    cursor.execute(query)
 
-    try:
-
-        cursor.execute(query)
-
-        debug("get_specialties SQL execute: OK")
-
-    except Exception as e:
-
-        debug(
-            "get_specialties SQL execute: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
-
-    try:
-
-        rows = cursor.fetchall()
-
-        debug("get_specialties rows", rows)
-
-    except Exception as e:
-
-        debug(
-            "get_specialties fetchall: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
+    rows = cursor.fetchall()
 
     result = [
         {
@@ -248,8 +167,6 @@ def get_specialties(cursor):
         for row in rows
     ]
 
-    debug("get_specialties result", result)
-
     return result
 
 
@@ -258,18 +175,6 @@ def get_specialties(cursor):
 # ============================================================
 
 def get_available_slots(cursor, specialty_id):
-
-    debug("get_available_slots() called")
-
-    debug(
-        "specialty_id",
-        repr(specialty_id)
-    )
-
-    debug(
-        "specialty_id type",
-        type(specialty_id).__name__
-    )
 
     query = """
         SELECT
@@ -295,53 +200,12 @@ def get_available_slots(cursor, specialty_id):
         "specialty_id": specialty_id
     }
 
-    debug(
-        "get_available_slots SQL",
-        query
-    )
-
-    debug(
-        "get_available_slots params",
+    cursor.execute(
+        query,
         params
     )
 
-    try:
-
-        cursor.execute(
-            query,
-            params
-        )
-
-        debug(
-            "get_available_slots SQL execute: OK"
-        )
-
-    except Exception as e:
-
-        debug(
-            "get_available_slots SQL execute: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
-
-    try:
-
-        rows = cursor.fetchall()
-
-        debug(
-            "get_available_slots rows",
-            rows
-        )
-
-    except Exception as e:
-
-        debug(
-            "get_available_slots fetchall: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
+    rows = cursor.fetchall()
 
     result = [
         {
@@ -354,17 +218,7 @@ def get_available_slots(cursor, specialty_id):
         for row in rows
     ]
 
-    debug(
-        "get_available_slots result",
-        result
-    )
-
     st.session_state.available_slots = result
-
-    debug(
-        "session_state.available_slots",
-        st.session_state.available_slots
-    )
 
     return result
 
@@ -375,20 +229,15 @@ def get_available_slots(cursor, specialty_id):
 
 def select_slot(slot_id):
 
-    debug("select_slot() called")
+    debug_slot("select_slot() called")
 
-    debug(
-        "slot_id received",
+    debug_slot(
+        "slot_id received from model",
         repr(slot_id)
     )
 
-    debug(
-        "slot_id type",
-        type(slot_id).__name__
-    )
-
-    debug(
-        "available_slots before selection",
+    debug_slot(
+        "available_slots",
         st.session_state.available_slots
     )
 
@@ -398,14 +247,9 @@ def select_slot(slot_id):
 
             st.session_state.selected_slot = slot
 
-            debug(
-                "slot FOUND and selected",
+            debug_slot(
+                "✅ SLOT FOUND",
                 slot
-            )
-
-            debug(
-                "session_state.selected_slot",
-                st.session_state.selected_slot
             )
 
             return {
@@ -413,8 +257,8 @@ def select_slot(slot_id):
                 "slot": slot
             }
 
-    debug(
-        "slot NOT FOUND",
+    debug_slot(
+        "❌ SLOT NOT FOUND",
         repr(slot_id)
     )
 
@@ -429,50 +273,10 @@ def select_slot(slot_id):
 
 def create_appointment(cursor):
 
-    debug("create_appointment() called")
-
     patient = st.session_state.patient
     slot = st.session_state.selected_slot
 
-    debug(
-        "patient from session_state",
-        patient
-    )
-
-    debug(
-        "selected_slot from session_state",
-        slot
-    )
-
-    if patient:
-
-        debug(
-            "patient_id",
-            repr(patient.get("patient_id"))
-        )
-
-        debug(
-            "patient_id type",
-            type(patient.get("patient_id")).__name__
-        )
-
-    if slot:
-
-        debug(
-            "slot_id",
-            repr(slot.get("slot_id"))
-        )
-
-        debug(
-            "slot_id type",
-            type(slot.get("slot_id")).__name__
-        )
-
     if not patient:
-
-        debug(
-            "create_appointment STOP: no patient"
-        )
 
         return {
             "status": "error",
@@ -480,10 +284,6 @@ def create_appointment(cursor):
         }
 
     if not slot:
-
-        debug(
-            "create_appointment STOP: no slot"
-        )
 
         return {
             "status": "error",
@@ -505,19 +305,6 @@ def create_appointment(cursor):
         "created_at": now,
         "updated_at": now
     }
-
-    debug(
-        "create_appointment params",
-        params
-    )
-
-    debug(
-        "create_appointment parameter types",
-        {
-            key: type(value).__name__
-            for key, value in params.items()
-        }
-    )
 
     query = """
         INSERT INTO workspace.clinic_ai.appointments (
@@ -544,30 +331,10 @@ def create_appointment(cursor):
         )
     """
 
-    debug(
-        "create_appointment SQL",
-        query
+    cursor.execute(
+        query,
+        params
     )
-
-    try:
-
-        cursor.execute(
-            query,
-            params
-        )
-
-        debug(
-            "create_appointment SQL execute: OK"
-        )
-
-    except Exception as e:
-
-        debug(
-            "create_appointment SQL execute: ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
 
     result = {
         "status": "created",
@@ -578,11 +345,6 @@ def create_appointment(cursor):
         },
         "slot": slot
     }
-
-    debug(
-        "create_appointment result",
-        result
-    )
 
     return result
 
@@ -719,34 +481,19 @@ def execute_tool(tool_call, cursor):
 
     arguments_raw = tool_call.function.arguments or "{}"
 
-    debug(
-        "TOOL CALL",
-        function_name
-    )
+    # Solo mostramos esto para select_slot.
+    if function_name == "select_slot":
 
-    debug(
-        "TOOL CALL raw arguments",
+        debug_slot(
+            "MODEL TOOL CALL",
+            {
+                "function": function_name,
+                "raw_arguments": arguments_raw
+            }
+        )
+
+    arguments = json.loads(
         arguments_raw
-    )
-
-    try:
-
-        arguments = json.loads(
-            arguments_raw
-        )
-
-    except Exception as e:
-
-        debug(
-            "TOOL ARGUMENT JSON ERROR",
-            f"{type(e).__name__}: {str(e)}"
-        )
-
-        raise
-
-    debug(
-        "TOOL CALL parsed arguments",
-        arguments
     )
 
     if function_name == "find_patient":
@@ -787,10 +534,13 @@ def execute_tool(tool_call, cursor):
             "error": f"Unknown tool {function_name}"
         }
 
-    debug(
-        f"TOOL RESULT: {function_name}",
-        result
-    )
+    # Solo mostramos el resultado de select_slot.
+    if function_name == "select_slot":
+
+        debug_slot(
+            "MODEL RECEIVES TOOL RESULT",
+            result
+        )
 
     return result
 
@@ -853,25 +603,6 @@ if prompt and ai_token and hostname and http_path and sql_token:
 
     try:
 
-        debug(
-            "NEW USER PROMPT",
-            prompt
-        )
-
-        debug(
-            "SESSION STATE BEFORE AGENT",
-            {
-                "patient": st.session_state.patient,
-                "selected_slot": st.session_state.selected_slot,
-                "available_slots_count": len(
-                    st.session_state.available_slots
-                ),
-                "messages_count": len(
-                    st.session_state.messages
-                )
-            }
-        )
-
         client = OpenAI(
             api_key=ai_token,
             base_url=(
@@ -880,25 +611,13 @@ if prompt and ai_token and hostname and http_path and sql_token:
             )
         )
 
-        debug(
-            "OpenAI client created"
-        )
-
         conn = sql.connect(
             server_hostname=hostname,
             http_path=http_path,
             access_token=sql_token
         )
 
-        debug(
-            "SQL connection created"
-        )
-
         cursor = conn.cursor()
-
-        debug(
-            "SQL cursor created"
-        )
 
 
         # ====================================================
@@ -1019,15 +738,6 @@ CREATING THE APPOINTMENT:
                 }
             )
 
-            debug(
-                "PATIENT CONTEXT SENT TO MODEL",
-                {
-                    "first_name": patient["first_name"],
-                    "last_name": patient["last_name"],
-                    "birth_date": patient["birth_date"]
-                }
-            )
-
 
         # ====================================================
         # CURRENT SELECTED SLOT CONTEXT
@@ -1051,15 +761,6 @@ CREATING THE APPOINTMENT:
                 }
             )
 
-            debug(
-                "SELECTED SLOT CONTEXT SENT TO MODEL",
-                {
-                    "doctor_name": slot["doctor_name"],
-                    "appointment_date": slot["appointment_date"],
-                    "start_time": slot["start_time"]
-                }
-            )
-
 
         # ====================================================
         # CONVERSATION HISTORY
@@ -1069,29 +770,12 @@ CREATING THE APPOINTMENT:
             st.session_state.messages
         )
 
-        debug(
-            "MESSAGES SENT TO MODEL",
-            messages
-        )
-
 
         # ====================================================
         # AGENT / TOOL LOOP
         # ====================================================
 
-        loop_number = 0
-
         while True:
-
-            loop_number += 1
-
-            debug(
-                f"AGENT LOOP #{loop_number}"
-            )
-
-            debug(
-                "CALLING MODEL"
-            )
 
             response = client.chat.completions.create(
                 model=MODEL,
@@ -1100,21 +784,7 @@ CREATING THE APPOINTMENT:
                 tool_choice="auto"
             )
 
-            debug(
-                "MODEL RESPONSE RECEIVED"
-            )
-
             message = response.choices[0].message
-
-            debug(
-                "MODEL MESSAGE CONTENT",
-                message.content
-            )
-
-            debug(
-                "MODEL TOOL CALL COUNT",
-                len(message.tool_calls or [])
-            )
 
 
             # ------------------------------------------------
@@ -1125,28 +795,12 @@ CREATING THE APPOINTMENT:
 
                 final_answer = message.content
 
-                debug(
-                    "FINAL MODEL ANSWER",
-                    final_answer
-                )
-
                 break
 
 
             # ------------------------------------------------
             # ASSISTANT TOOL CALL
             # ------------------------------------------------
-
-            debug(
-                "MODEL REQUESTED TOOLS",
-                [
-                    {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments
-                    }
-                    for tc in message.tool_calls
-                ]
-            )
 
             messages.append(
                 {
@@ -1173,19 +827,9 @@ CREATING THE APPOINTMENT:
 
             for tool_call in message.tool_calls:
 
-                debug(
-                    "EXECUTING TOOL",
-                    tool_call.function.name
-                )
-
                 tool_result = execute_tool(
                     tool_call,
                     cursor
-                )
-
-                debug(
-                    "TOOL RESULT TO MODEL",
-                    tool_result
                 )
 
                 messages.append(
@@ -1198,26 +842,6 @@ CREATING THE APPOINTMENT:
                         )
                     }
                 )
-
-                debug(
-                    "TOOL RESULT APPENDED TO MODEL MESSAGES"
-                )
-
-
-        # ====================================================
-        # FINAL STATE
-        # ====================================================
-
-        debug(
-            "FINAL SESSION STATE",
-            {
-                "patient": st.session_state.patient,
-                "selected_slot": st.session_state.selected_slot,
-                "available_slots_count": len(
-                    st.session_state.available_slots
-                )
-            }
-        )
 
 
         # ====================================================
@@ -1237,16 +861,5 @@ CREATING THE APPOINTMENT:
 
     except Exception as e:
 
-        debug(
-            "GLOBAL ERROR TYPE",
-            type(e).__name__
-        )
-
-        debug(
-            "GLOBAL ERROR MESSAGE",
-            str(e)
-        )
-
         st.error(type(e).__name__)
         st.error(str(e))
-        
