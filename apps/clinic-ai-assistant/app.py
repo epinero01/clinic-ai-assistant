@@ -40,7 +40,7 @@ if "patient" not in st.session_state:
 
 
 # ============================================================
-# SLOT DEBUG
+# DEBUG
 # ============================================================
 
 DEBUG_SLOT = True
@@ -52,8 +52,12 @@ def debug_slot(label, value=None):
 
         if value is None:
             st.write(f"🔎 SLOT DEBUG: {label}")
+
         else:
-            st.write(f"🔎 SLOT DEBUG: {label}", value)
+            st.write(
+                f"🔎 SLOT DEBUG: {label}",
+                value
+            )
 
 
 # ============================================================
@@ -176,6 +180,33 @@ def get_specialties(cursor):
 
 def get_available_slots(cursor, specialty_id):
 
+    debug_slot(
+        "get_available_slots() called"
+    )
+
+    debug_slot(
+        "specialty_id received",
+        repr(specialty_id)
+    )
+
+    debug_slot(
+        "specialty_id type",
+        type(specialty_id).__name__
+    )
+
+    # ========================================================
+    # TEMPORARY TEST
+    #
+    # We already verified directly in Databricks that:
+    #
+    #     WHERE d.specialty_id = 'CARD'
+    #
+    # works correctly.
+    #
+    # Therefore, for this test we deliberately use the literal
+    # CARD instead of a bound parameter.
+    # ========================================================
+
     query = """
         SELECT
             d.doctor_id,
@@ -187,7 +218,7 @@ def get_available_slots(cursor, specialty_id):
         FROM workspace.clinic_ai.doctors d
         INNER JOIN workspace.clinic_ai.doctor_schedule ds
             ON d.doctor_id = ds.doctor_id
-        WHERE d.specialty_id = %(specialty_id)s
+        WHERE d.specialty_id = 'CARD'
           AND d.active = true
           AND ds.slot_status = 'AVAILABLE'
         ORDER BY
@@ -196,16 +227,46 @@ def get_available_slots(cursor, specialty_id):
         LIMIT 20
     """
 
-    params = {
-        "specialty_id": specialty_id
-    }
-
-    cursor.execute(
-        query,
-        params
+    debug_slot(
+        "get_available_slots SQL",
+        query
     )
 
-    rows = cursor.fetchall()
+    try:
+
+        cursor.execute(query)
+
+        debug_slot(
+            "get_available_slots SQL execute",
+            "OK"
+        )
+
+    except Exception as e:
+
+        debug_slot(
+            "get_available_slots SQL execute ERROR",
+            f"{type(e).__name__}: {str(e)}"
+        )
+
+        raise
+
+    try:
+
+        rows = cursor.fetchall()
+
+        debug_slot(
+            "get_available_slots rows",
+            rows
+        )
+
+    except Exception as e:
+
+        debug_slot(
+            "get_available_slots fetchall ERROR",
+            f"{type(e).__name__}: {str(e)}"
+        )
+
+        raise
 
     result = [
         {
@@ -218,6 +279,11 @@ def get_available_slots(cursor, specialty_id):
         for row in rows
     ]
 
+    debug_slot(
+        "get_available_slots result",
+        result
+    )
+
     st.session_state.available_slots = result
 
     return result
@@ -229,15 +295,22 @@ def get_available_slots(cursor, specialty_id):
 
 def select_slot(slot_id):
 
-    debug_slot("select_slot() called")
+    debug_slot(
+        "select_slot() called"
+    )
 
     debug_slot(
-        "slot_id received from model",
+        "slot_id received",
         repr(slot_id)
     )
 
     debug_slot(
-        "available_slots",
+        "slot_id type",
+        type(slot_id).__name__
+    )
+
+    debug_slot(
+        "available_slots before selection",
         st.session_state.available_slots
     )
 
@@ -248,7 +321,7 @@ def select_slot(slot_id):
             st.session_state.selected_slot = slot
 
             debug_slot(
-                "✅ SLOT FOUND",
+                "slot FOUND and selected",
                 slot
             )
 
@@ -258,7 +331,7 @@ def select_slot(slot_id):
             }
 
     debug_slot(
-        "❌ SLOT NOT FOUND",
+        "slot NOT FOUND",
         repr(slot_id)
     )
 
@@ -434,19 +507,15 @@ TOOLS = [
             "name": "select_slot",
             "description": (
                 "Select one appointment slot from the slots "
-                "previously returned to the user. "
-                "The slot_id must be the internal slot_id "
+                "previously returned by get_available_slots. "
+                "The slot_id must be the exact internal slot_id "
                 "returned by get_available_slots."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "slot_id": {
-                        "type": "string",
-                        "description": (
-                            "Internal slot_id returned by "
-                            "get_available_slots."
-                        )
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -461,10 +530,11 @@ TOOLS = [
         "function": {
             "name": "create_appointment",
             "description": (
-                "Create the appointment using the patient and "
-                "slot already selected internally. "
-                "Only call this after the user has explicitly "
-                "confirmed the selected appointment."
+                "Create the appointment after the patient has "
+                "selected a slot and explicitly confirmed that "
+                "they want to book it. "
+                "The patient and selected slot are maintained "
+                "internally by the application."
             ),
             "parameters": {
                 "type": "object",
@@ -496,9 +566,20 @@ def execute_tool(tool_call, cursor):
             }
         )
 
-    arguments = json.loads(
-        arguments_raw
-    )
+    try:
+
+        arguments = json.loads(
+            arguments_raw
+        )
+
+    except Exception as e:
+
+        debug_slot(
+            "TOOL ARGUMENT JSON ERROR",
+            f"{type(e).__name__}: {str(e)}"
+        )
+
+        raise
 
     if function_name == "find_patient":
 
@@ -670,7 +751,7 @@ APPOINTMENT SEARCH:
 
 14. Present available appointments in Spanish.
 
-15. Do not expose technical identifiers to the user.
+15. Do not expose technical identifiers unless necessary.
 
 SLOT SELECTION:
 
@@ -800,7 +881,11 @@ CREATING THE APPOINTMENT:
         # AGENT / TOOL LOOP
         # ====================================================
 
+        loop_number = 0
+
         while True:
+
+            loop_number += 1
 
             response = client.chat.completions.create(
                 model=MODEL,
