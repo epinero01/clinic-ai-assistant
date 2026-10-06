@@ -1,27 +1,17 @@
 import json
 import streamlit as st
-
 from openai import OpenAI
 from databricks import sql
 
-
-# ======================================================
-# CONFIG
-# ======================================================
-
 MODEL = "workspace.clinic_ai.clinic_ai_service_model"
 
-st.set_page_config(
-    page_title="Clinic AI",
-    page_icon="🏥"
-)
-
+st.set_page_config(page_title="Clinic AI", page_icon="🏥")
 st.title("🏥 Clinic AI")
 
 
-# ======================================================
-# SESSION
-# ======================================================
+# ============================================================
+# SESSION STATE
+# ============================================================
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -32,17 +22,98 @@ if "available_slots" not in st.session_state:
 if "selected_slot" not in st.session_state:
     st.session_state.selected_slot = None
 
+if "patient" not in st.session_state:
+    st.session_state.patient = None
 
-# ======================================================
-# TOOLS
-# ======================================================
+
+# ============================================================
+# PATIENT
+# ============================================================
+
+def find_patient(cursor, first_name, last_name, birth_date=None):
+    """
+    Find a patient by first name and last name.
+    If there are multiple matches, birth_date can be used
+    to disambiguate.
+    """
+
+    query = """
+        SELECT
+            patient_id,
+            first_name,
+            last_name,
+            birth_date
+        FROM workspace.clinic_ai.patients
+        WHERE active = true
+          AND LOWER(first_name) = LOWER(%(first_name)s)
+          AND LOWER(last_name) = LOWER(%(last_name)s)
+    """
+
+    params = {
+        "first_name": first_name.strip(),
+        "last_name": last_name.strip()
+    }
+
+    if birth_date:
+        query += """
+          AND birth_date = %(birth_date)s
+        """
+        params["birth_date"] = birth_date
+
+    query += """
+        ORDER BY birth_date
+    """
+
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    if not rows:
+        st.session_state.patient = None
+
+        return {
+            "status": "not_found",
+            "message": "No active patient was found with those details."
+        }
+
+    if len(rows) > 1:
+        st.session_state.patient = None
+
+        return {
+            "status": "multiple_matches",
+            "patients": [
+                {
+                    "first_name": row[1],
+                    "last_name": row[2],
+                    "birth_date": str(row[3])
+                }
+                for row in rows
+            ]
+        }
+
+    row = rows[0]
+
+    patient = {
+        "patient_id": row[0],
+        "first_name": row[1],
+        "last_name": row[2],
+        "birth_date": str(row[3])
+    }
+
+    st.session_state.patient = patient
+
+    return {
+        "status": "found",
+        "patient": patient
+    }
+
+
+# ============================================================
+# SPECIALTIES
+# ============================================================
 
 def get_specialties(cursor):
-
     cursor.execute("""
-        SELECT
-            specialty_id,
-            specialty_name
+        SELECT specialty_id, specialty_name
         FROM workspace.clinic_ai.specialties
         WHERE active = true
         ORDER BY specialty_name
@@ -59,8 +130,11 @@ def get_specialties(cursor):
     ]
 
 
-def get_available_slots(cursor, specialty_id):
+# ============================================================
+# AVAILABLE SLOTS
+# ============================================================
 
+def get_available_slots(cursor, specialty_id):
     cursor.execute("""
         SELECT
             d.doctor_id,
@@ -101,8 +175,11 @@ def get_available_slots(cursor, specialty_id):
     return result
 
 
-def select_slot(slot_id):
+# ============================================================
+# SELECT SLOT
+# ============================================================
 
+def select_slot(slot_id):
     for slot in st.session_state.available_slots:
 
         if slot["slot_id"] == slot_id:
@@ -119,19 +196,55 @@ def select_slot(slot_id):
     }
 
 
-# ======================================================
-# TOOL DEFINITIONS
-# ======================================================
+# ============================================================
+# TOOLS
+# ============================================================
 
 TOOLS = [
+
+    {
+        "type": "function",
+        "function": {
+            "name": "find_patient",
+            "description": (
+                "Find an active patient in the clinic database "
+                "using their first name and last name. "
+                "If multiple patients have the same name, "
+                "birth date can be used to identify the correct patient."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "first_name": {
+                        "type": "string",
+                        "description": "Patient's first name."
+                    },
+                    "last_name": {
+                        "type": "string",
+                        "description": "Patient's last name."
+                    },
+                    "birth_date": {
+                        "type": "string",
+                        "description": (
+                            "Patient's birth date in YYYY-MM-DD format. "
+                            "Only use when needed to distinguish "
+                            "between multiple patients with the same name."
+                        )
+                    }
+                },
+                "required": [
+                    "first_name",
+                    "last_name"
+                ]
+            }
+        }
+    },
+
     {
         "type": "function",
         "function": {
             "name": "get_specialties",
-            "description": (
-                "Retrieve the catalog of medical specialties "
-                "available in the clinic."
-            ),
+            "description": "Retrieve the catalog of medical specialties.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -139,23 +252,17 @@ TOOLS = [
             }
         }
     },
+
     {
         "type": "function",
         "function": {
             "name": "get_available_slots",
-            "description": (
-                "Retrieve appointment slots for a specialty. "
-                "The specialty_id must come from get_specialties."
-            ),
+            "description": "Retrieve appointment slots for a specialty.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "specialty_id": {
-                        "type": "string",
-                        "description": (
-                            "The specialty_id returned by "
-                            "get_specialties."
-                        )
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -164,6 +271,7 @@ TOOLS = [
             }
         }
     },
+
     {
         "type": "function",
         "function": {
@@ -176,11 +284,7 @@ TOOLS = [
                 "type": "object",
                 "properties": {
                     "slot_id": {
-                        "type": "string",
-                        "description": (
-                            "The slot_id returned by "
-                            "get_available_slots."
-                        )
+                        "type": "string"
                     }
                 },
                 "required": [
@@ -192,9 +296,9 @@ TOOLS = [
 ]
 
 
-# ======================================================
-# EXECUTE TOOL
-# ======================================================
+# ============================================================
+# TOOL EXECUTION
+# ============================================================
 
 def execute_tool(tool_call, cursor):
 
@@ -203,6 +307,15 @@ def execute_tool(tool_call, cursor):
     arguments = json.loads(
         tool_call.function.arguments or "{}"
     )
+
+    if function_name == "find_patient":
+
+        return find_patient(
+            cursor,
+            arguments["first_name"],
+            arguments["last_name"],
+            arguments.get("birth_date")
+        )
 
     if function_name == "get_specialties":
 
@@ -226,9 +339,9 @@ def execute_tool(tool_call, cursor):
     }
 
 
-# ======================================================
-# CONNECTIONS
-# ======================================================
+# ============================================================
+# CONNECTION PARAMETERS
+# ============================================================
 
 ai_token = st.text_input(
     "AI Token",
@@ -249,9 +362,9 @@ sql_token = st.text_input(
 )
 
 
-# ======================================================
+# ============================================================
 # CHAT HISTORY
-# ======================================================
+# ============================================================
 
 for msg in st.session_state.messages:
 
@@ -261,26 +374,16 @@ for msg in st.session_state.messages:
             st.write(msg["content"])
 
 
-# ======================================================
-# INPUT
-# ======================================================
-
 prompt = st.chat_input(
     "¿Cómo puedo ayudarte?"
 )
 
 
-# ======================================================
-# MAIN
-# ======================================================
+# ============================================================
+# MAIN AGENT LOOP
+# ============================================================
 
-if (
-    prompt
-    and ai_token
-    and hostname
-    and http_path
-    and sql_token
-):
+if prompt and ai_token and hostname and http_path and sql_token:
 
     st.session_state.messages.append(
         {
@@ -294,10 +397,6 @@ if (
 
     try:
 
-        # ==============================================
-        # OPENAI CLIENT
-        # ==============================================
-
         client = OpenAI(
             api_key=ai_token,
             base_url=(
@@ -305,10 +404,6 @@ if (
                 "ai-gateway/mlflow/v1"
             )
         )
-
-        # ==============================================
-        # SQL CONNECTION
-        # ==============================================
 
         conn = sql.connect(
             server_hostname=hostname,
@@ -318,64 +413,122 @@ if (
 
         cursor = conn.cursor()
 
-        # ==============================================
+
+        # ----------------------------------------------------
         # SYSTEM PROMPT
-        # ==============================================
+        # ----------------------------------------------------
 
         system_prompt = """
 You are a medical appointment assistant.
 
-All medical specialties and appointment availability must
-come from the tools provided by this application.
-
-Do not use external search or external knowledge to determine
-which specialties or appointments are available.
-
 The clinic database is the only source of truth.
+Do not use external knowledge or external search.
 
-Rules:
+IMPORTANT PATIENT IDENTIFICATION RULES:
 
-1. Never invent specialties.
+1. Before helping the user search for an appointment,
+   make sure the patient has been identified.
 
-2. Always call get_specialties first when the user needs
-   to choose a medical specialty.
+2. If the patient has not yet been identified,
+   ask the user for their first name and last name.
 
-3. Use only specialties returned by get_specialties.
+3. Once the user provides the first name and last name,
+   call find_patient.
 
-4. Then call get_available_slots using the specialty_id
-   returned by get_specialties.
+4. If find_patient returns exactly one patient,
+   consider that patient identified and continue.
 
-5. Present available appointments in Spanish.
+5. If find_patient returns multiple patients,
+   ask the user for their date of birth to distinguish them,
+   then call find_patient again using the birth date.
 
-6. Never invent slot identifiers.
+6. If the patient is not found,
+   tell the user that no matching active patient was found
+   and ask them to check the information.
 
-7. Use only slot_id values returned by
-   get_available_slots.
+7. Do not ask the user for patient_id.
+   patient_id is an internal database identifier.
 
-8. If the user chooses a specific appointment,
-   call select_slot.
+8. Do not continue to appointment search until the patient
+   has been successfully identified.
 
-9. After selecting a slot, confirm which slot was selected
-   and ask the user if they want to proceed.
+APPOINTMENT SEARCH RULES:
 
-10. Answer the user in Spanish.
+9. Once the patient is identified, use get_specialties
+   to retrieve the available medical specialties.
+
+10. Never invent specialties.
+
+11. Use only specialties returned by the catalog.
+
+12. Once the specialty is known, call get_available_slots.
+
+13. Never invent appointment slots.
+
+14. Use only slots returned by get_available_slots.
+
+15. Present available appointments in Spanish.
+
+16. Do not expose internal technical identifiers unless
+    they are necessary for the interaction.
+
+17. If the user chooses a specific appointment,
+    call select_slot.
+
+18. After selecting a slot, confirm which appointment
+    was selected and ask the user if they want to proceed.
+
+19. Do not create or save an appointment yet.
+    There is currently no tool for creating appointments.
+
+20. Never display tool calls, function names, JSON,
+    or internal execution syntax to the user.
 """
 
-        # ==============================================
-        # MESSAGES
-        # ==============================================
 
         messages = [
             {
                 "role": "system",
                 "content": system_prompt
-            },
-            *st.session_state.messages
+            }
         ]
 
-        # ==============================================
-        # AGENT LOOP
-        # ==============================================
+
+        # ----------------------------------------------------
+        # CURRENT PATIENT CONTEXT
+        # ----------------------------------------------------
+
+        if st.session_state.patient:
+
+            patient = st.session_state.patient
+
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "The currently identified patient is: "
+                        f"{patient['first_name']} "
+                        f"{patient['last_name']}, "
+                        f"birth date {patient['birth_date']}. "
+                        "The patient_id is an internal value and "
+                        "must not be requested from the user."
+                    )
+                }
+            )
+
+
+        # ----------------------------------------------------
+        # CONVERSATION HISTORY
+        # ----------------------------------------------------
+
+        messages.extend(
+            st.session_state.messages
+        )
+
+
+        # ----------------------------------------------------
+        # AGENT / TOOL LOOP
+        # ----------------------------------------------------
 
         while True:
 
@@ -388,42 +541,43 @@ Rules:
 
             message = response.choices[0].message
 
-            # ------------------------------------------
-            # No tool call -> final answer
-            # ------------------------------------------
+
+            # ------------------------------------------------
+            # NO TOOL CALL
+            # ------------------------------------------------
 
             if not message.tool_calls:
 
                 final_answer = message.content
                 break
 
-            # ------------------------------------------
-            # Add assistant tool call to conversation
-            # ------------------------------------------
+
+            # ------------------------------------------------
+            # ASSISTANT TOOL CALL MESSAGE
+            # ------------------------------------------------
 
             messages.append(
                 {
                     "role": "assistant",
-                    "content": message.content,
+                    "content": None,
                     "tool_calls": [
                         {
-                            "id": tool_call.id,
+                            "id": tc.id,
                             "type": "function",
                             "function": {
-                                "name": tool_call.function.name,
-                                "arguments": (
-                                    tool_call.function.arguments
-                                )
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
                             }
                         }
-                        for tool_call in message.tool_calls
+                        for tc in message.tool_calls
                     ]
                 }
             )
 
-            # ------------------------------------------
-            # Execute tools
-            # ------------------------------------------
+
+            # ------------------------------------------------
+            # EXECUTE TOOLS
+            # ------------------------------------------------
 
             for tool_call in message.tool_calls:
 
@@ -443,9 +597,10 @@ Rules:
                     }
                 )
 
-        # ==============================================
-        # ASSISTANT RESPONSE
-        # ==============================================
+
+        # ----------------------------------------------------
+        # SAVE FINAL ANSWER
+        # ----------------------------------------------------
 
         st.session_state.messages.append(
             {
@@ -456,6 +611,7 @@ Rules:
 
         with st.chat_message("assistant"):
             st.write(final_answer)
+
 
     except Exception as e:
 
